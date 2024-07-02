@@ -4,8 +4,6 @@ Switching)
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# SMARTS (Statistical Methods for Assessement of real-world Treatment Switching)
-
 SMARTS is a tool to assign pseudo-switching time to patients who
 initiate a treatment and stay on the the treatment (continuers), in
 comparison to patients who initiate a treatment and switch to another
