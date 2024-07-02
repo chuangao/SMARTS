@@ -1,6 +1,7 @@
---
+---
+title: SMARTS (Statistical Methods for Assessement of real-world Treatment Switching)
 output: github_document
-bibliography: "references.bib"
+#bibliography: "references.bib"
 ---
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
