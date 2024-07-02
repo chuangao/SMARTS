@@ -15,8 +15,8 @@ SMARTS is a tool to assign pseudo-switching time to patients who initiate a trea
 `R CMD INSTALL SMARTS` <br/>
 
 ## Example usage
-`library(SMARTS)` <br/>
+library(SMARTS)
 `data_tmp <- sim_data(n=500, seed=123,swi_min=1.5,swi_max=4.5, wshape_bf = 1, log_hr_confound = 2)` <br/>
-`data <- list(cont = data_tmp %>% filter(swi == 0)` <br/>
+`data <- list(cont = data_tmp %>% filter(swi == 0),` <br/>
  `            swi = data_tmp %>% filter(swi == 1))` <br/>
 `data_rand <- random_assign(data, nbin=10, seed=123, swi_time='xoyrs', cens_time = 'censyrs')` <br/>
