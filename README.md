@@ -4,11 +4,11 @@ Switching)
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-SMARTS is a tool to assign pseudo-switching time to patients who
-initiate a treatment and stay on the the treatment (continuers), in
+SMARTS is a tool for assigning pseudo-switching time to patients who
+initiate a treatment and stay on the same treatment (continuers), in
 comparison to patients who initiate a treatment and switch to another
-treatment (switchers). The assigned pseudo-switching time is used in
-later analysis for reduce bias caused by time varying confounding.
+treatment (switchers). The assigned pseudo-switching time is later used
+in analysis to reduce bias caused by time varying confounding.
 
 ## Install using devtools
 
@@ -16,8 +16,6 @@ later analysis for reduce bias caused by time varying confounding.
 library(devtools)
 install_github("chuangao/SMARTS")
 ```
-
-## The package can also be rom source (see below) if this is the case.
 
 ## Install from source
 
