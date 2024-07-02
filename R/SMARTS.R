@@ -95,6 +95,12 @@ assign_per_bin <- function(counts, bin, swi_time=swi_time, cens_time = cens_time
 
 random_assign <- function(data, nbin=10, seed = 123, swi_time='xoyrs', cens_time = 'censyrs'){
  
+  data
+  nbin=10
+  seed = 123
+  swi_time='xoyrs'
+  cens_time = 'censyrs'
+  
   set.seed(seed)
   
   cont <- data$cont
