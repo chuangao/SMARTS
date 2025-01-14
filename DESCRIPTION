@@ -1,0 +1,9 @@
+Package: SMARTS
+Type: Package
+Title: R package for Statistical Methods for Assessement of real-world Treatment Switching (SMARTS)
+Version: 0.0.0.0
+RoxygenNote: 7.3.2
+Encoding: UTF-8
+Depends: 
+    R (>= 2.10)
+LazyData: true
