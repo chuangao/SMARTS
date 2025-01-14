@@ -26,13 +26,13 @@ R CMD INSTALL SMARTS
 
 ## Example usage
 ### Mock data
-Mock data has been provided for demonstration purposes. The mock data contains the following columns:
-id: patient ID
-swi: switcher variable indicating whether a patient is a switcher or a continuer
-swi_yrs: the years at which the switchers switch; the value is NA for continuers
-event1 and event2: two events that occurred sequentially
-event1_yrs and event2_yrs: the event years for the two events
-fup_yrs: the follow-up end years
+Mock data has been provided for demonstration purposes. The mock data contains the following columns:  
+id: patient ID.   
+swi: switcher variable indicating whether a patient is a switcher or a continuer.  
+swi_yrs: the years at which the switchers switch; the value is NA for continuers.  
+event1 and event2: two events that occurred sequentially.  
+event1_yrs and event2_yrs: the event years for the two events.  
+fup_yrs: the follow-up end years.  
 
 ``` r
 library(SMARTS)
