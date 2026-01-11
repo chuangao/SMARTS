@@ -1,9 +1,29 @@
 Package: SMARTS
 Type: Package
-Title: R package for Statistical Methods for Assessement of real-world Treatment Switching (SMARTS)
-Version: 0.0.0.0
+Title: Statistical Methods for Assessment of Real-world Treatment Switching
+Version: 0.1.0
+Authors@R: person("Chuan", "Gao", email = "chuan.gao.cornell@gmail.com", role = c("aut", "cre"))
+Description: Provides methods for analyzing treatment switching in observational
+    studies, including pseudo-switching time assignment, propensity score matching,
+    and inverse probability of treatment weighting for causal inference.
+License: GPL-3
 RoxygenNote: 7.3.2
 Encoding: UTF-8
-Depends: 
-    R (>= 2.10)
+Depends:
+    R (>= 3.5.0)
+Imports:
+    survival,
+    MatchIt
+Suggests:
+    survminer,
+    ggplot2,
+    ggpubr,
+    cowplot,
+    parallel,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
 LazyData: true
+VignetteBuilder: knitr
+URL: https://github.com/chuangao/SMARTS
+BugReports: https://github.com/chuangao/SMARTS/issues
