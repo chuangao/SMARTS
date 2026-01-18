@@ -69,7 +69,16 @@ rederive_events <- function(data, new_switch_time_col = "new_switch_time") {
     else {
       # New pre-switch: event occurred (the post_event is now pre-switch)
       data$new_pre_event[i] <- max(pre_event, post_event)
-      data$new_pre_event_time[i] <- post_event_time
+      data$new_pre_event_time[i] <- ifelse(
+        pre_event == 1,
+        pre_event_time,
+        ifelse(
+          post_event == 1,
+          post_event_time,
+          new_switch
+        )
+      )
+      #data$new_pre_event_time[i] <- post_event_time
 
       # New post-switch: censored
       data$new_post_event[i] <- 0
