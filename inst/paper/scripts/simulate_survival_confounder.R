@@ -1,35 +1,35 @@
 # ============================================================================
-# Simulate Survival Data with Time-Varying Confounding (Paired Design)
+# Simulate Survival Data with Time-Varying Confounding (Version 2)
 # ============================================================================
 #
-# This function simulates time-to-first-event data for matched pairs:
-# - Each pair: 1 switcher + 1 continuer
-# - Same switching/pseudo-switching time within pair
-# - Time-varying confounder scores
+# Key change from v1:
+# - Continuers: CONSTANT confounder over time (stable on same treatment)
+# - Switchers: DYNAMIC confounder (worsens -> peaks at switch -> improves)
 #
-# Confounder pattern:
-# - Pre-switching: Gap widens (switchers deteriorate faster)
-# - Peak gap at switching time
-# - Post-switching: Gap narrows to floor (switchers improve but remain worse)
-#
-# Output: One row per patient with confounder scores at each time interval
+# This is more clinically realistic:
+# - Switchers deteriorate (reason to switch), then improve with new treatment
+# - Continuers remain stable on their current treatment
 # ============================================================================
 
-# Helper function: Calculate mean gap at time t relative to switching time
-calculate_gap <- function(t, t_switch, t_max,
-                          gap_baseline, gap_peak, gap_floor) {
+# Helper function: Calculate switcher's confounder deviation from baseline
+calculate_switcher_deviation <- function(t, t_switch, t_max,
+                                          gap_baseline, gap_peak, gap_end) {
   if (t <= t_switch) {
-    # Pre-switching: linear increase from baseline to peak
+    # Pre-switching: linear increase from baseline gap to peak
     proportion <- t / t_switch
-    gap <- gap_baseline + (gap_peak - gap_baseline) * proportion
+    deviation <- gap_baseline + (gap_peak - gap_baseline) * proportion
   } else {
-    # Post-switching: linear decrease from peak to floor
+    # Post-switching: linear decrease from peak to end (can go to 0 or negative)
     time_after_switch <- t - t_switch
     time_remaining <- t_max - t_switch
-    proportion <- time_after_switch / time_remaining
-    gap <- gap_peak - (gap_peak - gap_floor) * proportion
+    if (time_remaining > 0) {
+      proportion <- time_after_switch / time_remaining
+      deviation <- gap_peak - (gap_peak - gap_end) * proportion
+    } else {
+      deviation <- gap_end
+    }
   }
-  return(gap)
+  return(deviation)
 }
 
 simulate_survival_data_confounder <- function(
@@ -43,10 +43,10 @@ simulate_survival_data_confounder <- function(
   switch_start,            # Start of switching window (e.g., 0.25)
   switch_end,              # End of switching window (e.g., 0.75)
   confounder_interval,     # Confounder measurement interval (e.g., 0.5 years)
-  confounder_baseline_mean,# Baseline mean confounder for continuers (e.g., 2.5)
-  confounder_gap_baseline, # Initial gap at t=0 (e.g., 0.5)
-  confounder_gap_peak,     # Peak gap at switching (e.g., 1.6)
-  confounder_gap_floor,    # Floor gap post-switching (e.g., 0.8)
+  confounder_baseline_mean,# Baseline mean confounder (same for both cohorts at t=0)
+  confounder_gap_baseline, # Switcher deviation at t=0 (e.g., 0.2)
+  confounder_gap_peak,     # Switcher deviation at switch time (e.g., 1.5)
+  confounder_gap_end,      # Switcher deviation at end (e.g., 0 or -0.2)
   confounder_sd            # SD for confounder random variation (e.g., 0.8)
 ) {
 
@@ -94,16 +94,15 @@ simulate_survival_data_confounder <- function(
     for (j in 1:length(time_points)) {
       t <- time_points[j]
 
-      # Calculate mean gap at this time point
-      gap <- calculate_gap(t, t_switch, t_max,
-                           confounder_gap_baseline,
-                           confounder_gap_peak,
-                           confounder_gap_floor)
-
-      # Generate confounder score
       if (is_switcher) {
-        mean_confounder <- confounder_baseline_mean + gap
+        # Switchers: dynamic confounder (worsens -> peaks -> improves)
+        deviation <- calculate_switcher_deviation(t, t_switch, t_max,
+                                                   confounder_gap_baseline,
+                                                   confounder_gap_peak,
+                                                   confounder_gap_end)
+        mean_confounder <- confounder_baseline_mean + deviation
       } else {
+        # Continuers: constant confounder at baseline
         mean_confounder <- confounder_baseline_mean
       }
 
@@ -130,27 +129,22 @@ simulate_survival_data_confounder <- function(
 
     # PRE-SWITCHING PERIOD: Simulate first event
     # Hazard depends on confounder score
-    # For Weibull proportional hazards: scale = lambda_0 / exp(beta * X / shape)
     scale_pre <- lambda_0 / exp(beta_confounder * confounder_score / shape)
 
     # Generate time to first pre-switch event
     time_to_event <- rweibull(1, shape = shape, scale = scale_pre)
 
     if (time_to_event < t_switch) {
-      # Event occurred before switching
       result$pre_event[i] <- 1
       result$pre_event_time[i] <- time_to_event
     }
 
     # POST-SWITCHING PERIOD: Simulate first event after switching
-    # Hazard depends on confounder and treatment (for switchers)
     linear_predictor <- beta_confounder * confounder_score
     if (is_switcher) {
       linear_predictor <- linear_predictor + beta_treatment
     }
 
-    # Calculate Weibull scale parameter for post-switching
-    # Must divide by shape to maintain proportional hazards
     scale_post <- lambda_0 / exp(linear_predictor / shape)
 
     # Conditional Weibull sampling
@@ -161,7 +155,6 @@ simulate_survival_data_confounder <- function(
                                     scale = scale_post)
 
     if (time_to_post_event < t_max) {
-      # Event occurred after switching
       result$post_event[i] <- 1
       result$post_event_time[i] <- time_to_post_event
     }
@@ -171,65 +164,4 @@ simulate_survival_data_confounder <- function(
   result <- cbind(result, confounder_matrix)
 
   return(result)
-}
-
-# ============================================================================
-# Example Usage
-# ============================================================================
-
-set.seed(123)
-data <- simulate_survival_data_confounder(
-  n_pairs = 200,                      # 200 pairs = 400 patients
-  beta_treatment = log(0.5),          # True treatment HR = 0.5
-  beta_confounder = log(1.3),         # Confounder effect HR = 1.3 per point
-  lambda_0 = 10,                      # Baseline hazard scale
-  shape = 1.5,                        # Accelerating hazard
-  T_min = 2,
-  T_max = 6,
-  switch_start = 0.25,
-  switch_end = 0.75,
-  confounder_interval = 0.5,          # Measure every 0.5 years
-  confounder_baseline_mean = 2.5,     # Continuer baseline mean
-  confounder_gap_baseline = 0.5,      # Initial gap
-  confounder_gap_peak = 1.6,          # Peak gap at switching
-  confounder_gap_floor = 0.8,         # Floor gap post-switching
-  confounder_sd = 0.8                 # Random variation
-)
-
-# View first few rows (core variables)
-cat("=== First 10 Patients (Core Variables) ===\n")
-core_vars <- c("id", "pair_id", "cohort", "T_max", "switch_time",
-               "confounder_at_switch", "pre_event", "post_event")
-print(head(data[, core_vars], 10))
-
-# Summary statistics
-cat("\n=== Summary Statistics ===\n")
-print(summary(data[, core_vars]))
-
-# Confounder at switching by cohort
-cat("\n=== Confounder at Switching by Cohort ===\n")
-print(aggregate(confounder_at_switch ~ cohort, data,
-                function(x) c(mean = mean(x), sd = sd(x))))
-
-# Check pre_event distribution by cohort
-cat("\n=== Pre-Event Distribution by Cohort ===\n")
-print(table(data$cohort, data$pre_event))
-
-# Check post_event distribution by cohort
-cat("\n=== Post-Event Distribution by Cohort ===\n")
-print(table(data$cohort, data$post_event))
-
-# Event rates
-cat("\n=== Event Rates ===\n")
-cat("Pre-switch event rate:\n")
-print(aggregate(pre_event ~ cohort, data, mean))
-cat("\nPost-switch event rate:\n")
-print(aggregate(post_event ~ cohort, data, mean))
-
-# Verify pairing structure
-cat("\n=== Verify Pairing (First 3 Pairs) ===\n")
-for (p in 1:3) {
-  pair_data <- data[data$pair_id == p, c("id", "cohort", "switch_time", "confounder_at_switch")]
-  cat("\nPair", p, ":\n")
-  print(pair_data, row.names = FALSE)
 }
