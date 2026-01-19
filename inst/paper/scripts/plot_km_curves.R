@@ -11,11 +11,12 @@ library(survminer)
 library(ggplot2)
 library(ggpubr)
 library(MatchIt)
+library(patchwork)
 library(cowplot)
 
 source("simulate_survival_confounder.R")
 
-setwd("/Users/cg253/iCloud/com\~apple\~CloudDocs/Projects/Athens_method")
+# Working directory set by caller
 # ============================================================================
 # Simulate Data
 # ============================================================================
@@ -35,7 +36,7 @@ data <- simulate_survival_data_confounder(
   confounder_baseline_mean = 2.5,
   confounder_gap_baseline = 0.5,
   confounder_gap_peak = 1.6,
-  confounder_gap_floor = 0.8,
+  confounder_gap_end = 0.8,
   confounder_sd = 0.8
 )
 
@@ -141,9 +142,9 @@ data_I <- data.frame(
 # Custom Theme and Colors (matching reference image)
 # ============================================================================
 
-# Colors: Yellow for Continuer, Blue for Switcher
-color_continuer <- "#E6A817"
-color_switcher <- "#1E88E5"
+# Colors: Orange for Continuer, Blue for Switcher (matching boxplot colors)
+color_continuer <- "#E69F00"
+color_switcher <- "#0072B2"
 colors <- c(color_continuer, color_switcher)
 
 # Publication-ready theme with larger fonts, no top/right borders, with grid
@@ -175,17 +176,19 @@ create_km_plot <- function(data, title, panel_label, weighted = FALSE,
     fit <- survfit(Surv(time, event) ~ group, data = data)
   }
 
-  # Use ggsurvplot with explicit color mapping
+  # Use ggsurvplot with explicit color mapping and line types
   p <- ggsurvplot(
     fit,
     data = data,
     palette = c(color_continuer, color_switcher),
+    linetype = c("solid", "dashed"),  # Continuer = solid, Switcher = dashed
     legend.labs = c("Continuer", "Switcher"),
-    size = 0.7,
+    size = 1.0,
+    alpha = 0.8,  # Add transparency to match boxplot appearance
     censor = FALSE,
     legend = "none",
     xlim = xlim,
-    ylim = c(0, 1.05),
+    ylim = c(0.25, 1.05),
     break.x.by = 1,
     break.y.by = 0.25,
     xlab = "",
@@ -197,9 +200,9 @@ create_km_plot <- function(data, title, panel_label, weighted = FALSE,
     theme_km() +
     ggtitle(title) +
     scale_y_continuous(
-      limits = c(0, 1.05),
-      breaks = c(0, 0.25, 0.50, 0.75, 1.00),
-      labels = c("0", "0.25", "0.50", "0.75", "1.00")
+      limits = c(0.25, 1.05),
+      breaks = c(0.25, 0.50, 0.75, 1.00),
+      labels = c("0.25", "0.50", "0.75", "1.00")
     ) +
     annotate("text", x = xlim[1], y = 1.02, label = panel_label,
              hjust = 0, vjust = 0, size = 4.5, fontface = "bold")
@@ -248,59 +251,65 @@ p_G <- create_km_plot(data_G, "Assign pseudo-switch\npost-switch + PSM", "G",
 p_I <- create_km_plot(data_I, "Assign pseudo-switch\npost-switch + IPTW", "I",
                       weighted = TRUE, xlim = c(0, 4), show_ylabel = FALSE)
 
-# Empty placeholder for C column row 2
-p_empty <- ggplot() + theme_void()
-
 # ============================================================================
-# Create Legend
+# Combine Plots using patchwork
 # ============================================================================
 
-legend_df <- data.frame(
-  x = c(1, 2, 1, 2),
-  y = c(1, 1, 2, 2),
-  group = factor(rep(c("Continuer", "Switcher"), each = 2),
-                 levels = c("Continuer", "Switcher"))
+# Layout: C (No pseudo-switch) spans both rows in column 2
+# Column 1: A (top), B (bottom)
+# Column 2: C (spans full height)
+# Column 3: D (top), E (bottom)
+# Column 4: F (top), G (bottom)
+# Column 5: H (top), I (bottom)
+
+# Use explicit layout with area()
+layout <- c(
+  area(1, 1),       # A: row 1, col 1
+  area(2, 1),       # B: row 2, col 1
+  area(1, 2, 2, 2), # C: rows 1-2, col 2 (spans both rows)
+  area(1, 3),       # D: row 1, col 3
+  area(2, 3),       # E: row 2, col 3
+  area(1, 4),       # F: row 1, col 4
+  area(2, 4),       # G: row 2, col 4
+  area(1, 5),       # H: row 1, col 5
+  area(2, 5)        # I: row 2, col 5
 )
 
-legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = group, group = group)) +
-  geom_line(linewidth = 1.2) +
-  scale_color_manual(values = c("Continuer" = color_continuer,
-                                "Switcher" = color_switcher),
-                     name = "") +
+# Combine plots in layout order: A, B, C, D, E, F, G, H, I
+main_plot <- p_A + p_B + p_C + p_D + p_E + p_F + p_G + p_H + p_I +
+  plot_layout(design = layout)
+
+# Create a standalone legend as a ggplot
+legend_plot <- ggplot(data.frame(x = 1:2, y = 1:2), aes(x, y)) +
+  geom_line(aes(color = "Continuer", linetype = "Continuer"), linewidth = 1.2, alpha = 0.8) +
+  geom_line(aes(color = "Switcher", linetype = "Switcher"), linewidth = 1.2, alpha = 0.8) +
+  scale_color_manual(
+    name = NULL,
+    values = c("Continuer" = color_continuer, "Switcher" = color_switcher),
+    guide = guide_legend(override.aes = list(linetype = c("solid", "dashed")))
+  ) +
+  scale_linetype_manual(
+    name = NULL,
+    values = c("Continuer" = "solid", "Switcher" = "dashed"),
+    guide = "none"
+  ) +
   theme_void() +
-  theme(legend.position = "top",
-        legend.text = element_text(size = 12),
-        legend.key.width = unit(2, "cm"))
+  theme(
+    legend.position = "top",
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 12),
+    legend.key.width = unit(2, "cm")
+  )
 
-legend <- get_legend(legend_plot)
+# Extract just the legend using cowplot
+legend_grob <- cowplot::get_legend(legend_plot)
 
-# ============================================================================
-# Combine Plots
-# ============================================================================
+# Wrap legend as a patchwork element
+legend_wrap <- wrap_elements(legend_grob)
 
-# Row 1
-row1 <- plot_grid(p_A, p_C, p_D, p_F, p_H,
-                  nrow = 1, rel_widths = c(1, 1, 1, 1, 1),
-                  align = "h", axis = "tb")
-
-# Row 2
-row2 <- plot_grid(p_B, p_empty, p_E, p_G, p_I,
-                  nrow = 1, rel_widths = c(1, 1, 1, 1, 1),
-                  align = "h", axis = "tb")
-
-# Common x-axis label
-xlab <- ggdraw() +
-  draw_label("Time", size = 14, hjust = 0.5)
-
-# Combine all
-final_plot <- plot_grid(
-  legend,
-  row1,
-  row2,
-  xlab,
-  ncol = 1,
-  rel_heights = c(0.06, 1, 1, 0.06)
-)
+# Combine: legend on top, main plot below
+final_plot <- legend_wrap / main_plot +
+  plot_layout(heights = c(0.05, 1))
 
 # ============================================================================
 # Save Plot
@@ -314,7 +323,7 @@ ggsave("../output/km_curves_publication.png", final_plot,
 
 cat("\nPlots saved to:\n")
 cat("  - ../output/km_curves_publication.pdf\n")
-cat("  - ../output/km_curves_publication.png\n")
+cat("  - ../output/km_curves_publication.png (300 dpi)\n")
 
 # ============================================================================
 # Summary Statistics

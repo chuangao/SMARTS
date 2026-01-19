@@ -126,6 +126,26 @@ lookup_confounder_at_time <- function(data, time_col = "new_switch_time",
 # Main Validation Function
 # ============================================================================
 
+
+n_pairs = 1000
+beta_treatment = log(0.5)
+beta_confounder = log(1.3)
+lambda_0 = 10
+shape = 1.5
+T_min = 2
+T_max = 6
+switch_start = 0.25
+switch_end = 0.75
+confounder_interval = 0.5
+confounder_baseline_mean = 2.5
+confounder_gap_baseline = 0.5
+confounder_gap_peak = 1.6
+confounder_gap_end = 0.8
+confounder_sd = 0.8
+nbin = 10
+seed = 123
+
+
 validate_smarts <- function(
   n_pairs = 1000,
   beta_treatment = log(0.5),
@@ -140,7 +160,7 @@ validate_smarts <- function(
   confounder_baseline_mean = 2.5,
   confounder_gap_baseline = 0.5,
   confounder_gap_peak = 1.6,
-  confounder_gap_floor = 0.8,
+  confounder_gap_end = 0.8,
   confounder_sd = 0.8,
   nbin = 10,
   seed = 123
@@ -167,7 +187,7 @@ validate_smarts <- function(
     confounder_baseline_mean = confounder_baseline_mean,
     confounder_gap_baseline = confounder_gap_baseline,
     confounder_gap_peak = confounder_gap_peak,
-    confounder_gap_floor = confounder_gap_floor,
+    confounder_gap_end = confounder_gap_end,
     confounder_sd = confounder_sd
   )
 
@@ -378,7 +398,7 @@ if (interactive()) {
 
   # Single run
   validation <- validate_smarts(
-    n_pairs = 1000,
+    n_pairs = 5000,
     beta_treatment = log(0.5),  # True HR = 0.5
     seed = 123
   )

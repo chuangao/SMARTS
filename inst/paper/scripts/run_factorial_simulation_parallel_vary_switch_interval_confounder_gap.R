@@ -3,13 +3,9 @@
 # ============================================================================
 #
 # Design:
-# - 4 scenarios: 2 hazard types × 2 confounding levels
+# - 8 scenarios: 2 intervals × 2 confounder × 2 hazard
 # - 10 data sets per scenario
 # - 1000 random assignments per data set (parallelized)
-#
-# Factors:
-# - Hazard: Accelerating (1.5) vs Constant (1)
-# - Confounding: None (beta=0, gap=0) vs Present (beta=log(1.3), gap=1.5)
 #
 # Output: Data frame with mean, SD, bias for each data set
 # ============================================================================
@@ -233,10 +229,10 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
 # ============================================================================
 
 run_scenario <- function(
+  switch_start, switch_end,
+  gap_baseline, gap_peak, gap_end,
   shape,
-  beta_confounder,
-  gap_peak,
-  n_pairs = 5000,
+  n_pairs = 1000,
   n_datasets = 10,
   n_assignments = 1000,
   n_cores = 12,
@@ -250,22 +246,22 @@ run_scenario <- function(
 
     set.seed(base_seed + ds * 1000)
 
-    # Simulate data (confounder gap settings match KM curves)
+    # Simulate data
     data <- simulate_survival_data_confounder(
       n_pairs = n_pairs,
       beta_treatment = log(0.5),
-      beta_confounder = beta_confounder,
+      beta_confounder = log(1.3),
       lambda_0 = 10,
       shape = shape,
       T_min = 2,
       T_max = 6,
-      switch_start = 0.25,
-      switch_end = 0.75,
+      switch_start = switch_start,
+      switch_end = switch_end,
       confounder_interval = 0.5,
       confounder_baseline_mean = 2.5,
-      confounder_gap_baseline = ifelse(gap_peak > 0, 0.5, 0),
+      confounder_gap_baseline = gap_baseline,
       confounder_gap_peak = gap_peak,
-      confounder_gap_end = ifelse(gap_peak > 0, 0.8, 0),
+      confounder_gap_end = gap_end,
       confounder_sd = 0.8
     )
 
@@ -286,55 +282,67 @@ run_scenario <- function(
 run_factorial_parallel <- function(
   n_pairs = 5000,
   n_datasets = 10,
-  n_assignments = 1000,
+  n_assignments = 10,
   n_cores = 12
 ) {
 
-  # Define factor levels
-  hazard_shapes <- c(accelerating = 1.5, constant = 1)
-
-  confounding_levels <- list(
-    none = c(beta = 0, gap = 0),
-    present = c(beta = log(1.3), gap = 1.6)  # Match KM curves settings
+  # Define factor levels (removed 0.35-0.65)
+  switch_intervals <- list(
+    c(0.25, 0.75),
+    c(0.45, 0.55)
   )
+
+  confounder_trajectories <- list(
+    variable = c(gap_baseline = 0.5, gap_peak = 1.6, gap_end = 0.8),  # Match KM curves
+    homogeneous = c(gap_baseline = 0.9, gap_peak = 1.1, gap_end = 0.9)
+  )
+
+  hazard_shapes <- c(accelerating = 1.5, constant = 1)
 
   all_results <- list()
   scenario_num <- 0
-  total_scenarios <- length(hazard_shapes) * length(confounding_levels)
+  total_scenarios <- length(switch_intervals) * length(confounder_trajectories) * length(hazard_shapes)
 
   start_time <- Sys.time()
 
-  for (hz_name in names(hazard_shapes)) {
-    for (conf_name in names(confounding_levels)) {
-      scenario_num <- scenario_num + 1
+  for (sw in switch_intervals) {
+    for (conf_name in names(confounder_trajectories)) {
+      for (hz_name in names(hazard_shapes)) {
+        scenario_num <- scenario_num + 1
 
-      hz <- hazard_shapes[[hz_name]]
-      conf <- confounding_levels[[conf_name]]
+        conf <- confounder_trajectories[[conf_name]]
+        hz <- hazard_shapes[[hz_name]]
 
-      cat("\n========================================\n")
-      cat("Scenario", scenario_num, "/", total_scenarios, "\n")
-      cat("Hazard:", hz_name, "\n")
-      cat("Confounding:", conf_name, "\n")
-      cat("========================================\n")
+        cat("\n========================================\n")
+        cat("Scenario", scenario_num, "/", total_scenarios, "\n")
+        cat("Switch:", sw[1], "-", sw[2], "\n")
+        cat("Confounder:", conf_name, "\n")
+        cat("Hazard:", hz_name, "\n")
+        cat("========================================\n")
 
-      result <- run_scenario(
-        shape = hz,
-        beta_confounder = conf["beta"],
-        gap_peak = conf["gap"],
-        n_pairs = n_pairs,
-        n_datasets = n_datasets,
-        n_assignments = n_assignments,
-        n_cores = n_cores
-      )
+        result <- run_scenario(
+          switch_start = sw[1],
+          switch_end = sw[2],
+          gap_baseline = conf["gap_baseline"],
+          gap_peak = conf["gap_peak"],
+          gap_end = conf["gap_end"],
+          shape = hz,
+          n_pairs = n_pairs,
+          n_datasets = n_datasets,
+          n_assignments = n_assignments,
+          n_cores = n_cores
+        )
 
-      result$hazard_type <- hz_name
-      result$confounding <- conf_name
+        result$switch_interval <- paste0(sw[1], "-", sw[2])
+        result$confounder_type <- conf_name
+        result$hazard_type <- hz_name
 
-      all_results[[scenario_num]] <- result
+        all_results[[scenario_num]] <- result
 
-      # Progress update
-      elapsed <- difftime(Sys.time(), start_time, units = "mins")
-      cat("  Elapsed time:", round(elapsed, 1), "minutes\n")
+        # Progress update
+        elapsed <- difftime(Sys.time(), start_time, units = "mins")
+        cat("  Elapsed time:", round(elapsed, 1), "minutes\n")
+      }
     }
   }
 
@@ -357,7 +365,7 @@ summarize_results <- function(results) {
 
   # Aggregate over data sets
   summary_df <- results %>%
-    group_by(hazard_type, confounding, situation, method) %>%
+    group_by(switch_interval, confounder_type, hazard_type, situation, method) %>%
     summarise(
       mean_hr_avg = mean(mean_hr, na.rm = TRUE),
       mean_hr_sd = sd(mean_hr, na.rm = TRUE),
@@ -380,7 +388,7 @@ if (interactive()) {
   cat("FACTORIAL SIMULATION STUDY (Parallel)\n")
   cat("========================================\n")
   cat("Settings:\n")
-  cat("  - Scenarios: 4 (2 hazard × 2 confounding)\n")
+  cat("  - Scenarios: 8\n")
   cat("  - Data sets per scenario: 10\n")
   cat("  - Random assignments per data set: 1000\n")
   cat("  - Cores: 12\n")
@@ -389,22 +397,22 @@ if (interactive()) {
 
   # Run simulation
   results <- run_factorial_parallel(
-    n_pairs = 5000,
+    n_pairs = 1000,
     n_datasets = 10,
-    n_assignments = 1000,
+    n_assignments = 10,
     n_cores = 12
   )
 
-  # Save raw results to output folder
-  saveRDS(results, "../output/factorial_results_raw.rds")
-  write.csv(results, "../output/factorial_results_raw.csv", row.names = FALSE)
+  # Save raw results to output folder (unique filename for this design)
+  saveRDS(results, "../output/factorial_results_raw_vary_switch_interval_confounder_gap.rds")
+  write.csv(results, "../output/factorial_results_raw_vary_switch_interval_confounder_gap.csv", row.names = FALSE)
 
   # Summarize
   summary <- summarize_results(results)
 
   # Save summary to output folder
-  saveRDS(summary, "../output/factorial_results_summary.rds")
-  write.csv(summary, "../output/factorial_results_summary.csv", row.names = FALSE)
+  saveRDS(summary, "../output/factorial_results_summary_vary_switch_interval_confounder_gap.rds")
+  write.csv(summary, "../output/factorial_results_summary_vary_switch_interval_confounder_gap.csv", row.names = FALSE)
 
   # Display summary
   cat("\n========================================\n")
@@ -421,7 +429,7 @@ if (interactive()) {
 
   iptw_summary <- summary %>%
     filter(method == "IPTW") %>%
-    select(hazard_type, confounding, situation, mean_hr_avg, bias_avg)
+    select(switch_interval, confounder_type, hazard_type, situation, mean_hr_avg, bias_avg)
 
   print(iptw_summary, n = 100)
 }
