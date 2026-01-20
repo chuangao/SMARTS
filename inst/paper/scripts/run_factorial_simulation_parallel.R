@@ -9,7 +9,10 @@
 #
 # Factors:
 # - Hazard: Accelerating (1.5) vs Constant (1)
-# - Confounding: None (beta=0, gap=0) vs Present (beta=log(1.3), gap=1.5)
+# - Confounding: None (beta=0, gap=0) vs Present (beta=log(1.3), gap=1.6)
+#
+# Methods: Naive, Adj, PSM, IPTW, SMR
+# - SMR (Standardized Morbidity Ratio) weighting targets ATT among switchers
 #
 # Output: Data frame with mean, SD, bias for each data set
 # ============================================================================
@@ -47,14 +50,14 @@ run_single_assignment <- function(seed, switchers, continuers, confounder_interv
   }, error = function(e) { return(NULL) })
 
   if (is.null(smarts_result)) {
-    return(c(naive = NA, adj = NA, psm = NA, iptw = NA))
+    return(c(naive = NA, adj = NA, psm = NA, iptw = NA, smr = NA))
   }
 
   cont_assigned <- smarts_result$assigned$cont
   swi_assigned <- smarts_result$assigned$swi
 
   if (nrow(cont_assigned) == 0 || nrow(swi_assigned) == 0) {
-    return(c(naive = NA, adj = NA, psm = NA, iptw = NA))
+    return(c(naive = NA, adj = NA, psm = NA, iptw = NA, smr = NA))
   }
 
   cont_assigned$new_switch_time <- cont_assigned$swi_yrs
@@ -76,14 +79,14 @@ run_single_assignment <- function(seed, switchers, continuers, confounder_interv
   }, error = function(e) { return(NULL) })
 
   if (is.null(smarts_data)) {
-    return(c(naive = NA, adj = NA, psm = NA, iptw = NA))
+    return(c(naive = NA, adj = NA, psm = NA, iptw = NA, smr = NA))
   }
 
   smarts_data$treated <- as.numeric(smarts_data$cohort == "switcher")
   smarts_data <- smarts_data[smarts_data$new_post_event_time > 0, ]
 
   if (nrow(smarts_data) < 50) {
-    return(c(naive = NA, adj = NA, psm = NA, iptw = NA))
+    return(c(naive = NA, adj = NA, psm = NA, iptw = NA, smr = NA))
   }
 
   # Naive
@@ -110,7 +113,7 @@ run_single_assignment <- function(seed, switchers, continuers, confounder_interv
     }
   }, error = function(e) { NA })
 
-  # IPTW
+  # IPTW (ATE - Average Treatment Effect)
   hr_iptw <- tryCatch({
     ps <- glm(treated ~ new_confounder_at_switch, data = smarts_data, family = binomial)
     smarts_data$ps <- predict(ps, type = "response")
@@ -119,7 +122,19 @@ run_single_assignment <- function(seed, switchers, continuers, confounder_interv
     exp(coef(cox)["treated"])
   }, error = function(e) { NA })
 
-  return(c(naive = hr_naive, adj = hr_adj, psm = hr_psm, iptw = hr_iptw))
+  # SMR (ATT - Average Treatment Effect in the Treated/Switchers)
+  # Switchers get weight=1, Continuers get weight=PS/(1-PS)
+  hr_smr <- tryCatch({
+    if (is.null(smarts_data$ps)) {
+      ps <- glm(treated ~ new_confounder_at_switch, data = smarts_data, family = binomial)
+      smarts_data$ps <- predict(ps, type = "response")
+    }
+    smarts_data$smr_weight <- ifelse(smarts_data$treated == 1, 1, smarts_data$ps / (1 - smarts_data$ps))
+    cox <- coxph(Surv(new_post_event_time, new_post_event) ~ treated, data = smarts_data, weights = smr_weight)
+    exp(coef(cox)["treated"])
+  }, error = function(e) { NA })
+
+  return(c(naive = hr_naive, adj = hr_adj, psm = hr_psm, iptw = hr_iptw, smr = hr_smr))
 }
 
 # ============================================================================
@@ -188,6 +203,16 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
     exp(coef(cox)["treated"])
   }, error = function(e) { NA })
 
+  hr_b_smr <- tryCatch({
+    if (is.null(baseline_data$ps)) {
+      ps <- glm(treated ~ confounder, data = baseline_data, family = binomial)
+      baseline_data$ps <- predict(ps, type = "response")
+    }
+    baseline_data$smr_weight <- ifelse(baseline_data$treated == 1, 1, baseline_data$ps / (1 - baseline_data$ps))
+    cox <- coxph(Surv(event_time, event) ~ treated, data = baseline_data, weights = smr_weight)
+    exp(coef(cox)["treated"])
+  }, error = function(e) { NA })
+
   # =========================================
   # SMARTS APPROACH (1000 parallel random assignments)
   # =========================================
@@ -203,25 +228,27 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
 
   # Calculate mean and SD for each method
   smarts_summary <- data.frame(
-    method = c("Naive", "Adj", "PSM", "IPTW"),
+    method = c("Naive", "Adj", "PSM", "IPTW", "SMR"),
     mean_hr = c(mean(smarts_df$naive, na.rm = TRUE),
                 mean(smarts_df$adj, na.rm = TRUE),
                 mean(smarts_df$psm, na.rm = TRUE),
-                mean(smarts_df$iptw, na.rm = TRUE)),
+                mean(smarts_df$iptw, na.rm = TRUE),
+                mean(smarts_df$smr, na.rm = TRUE)),
     sd_hr = c(sd(smarts_df$naive, na.rm = TRUE),
               sd(smarts_df$adj, na.rm = TRUE),
               sd(smarts_df$psm, na.rm = TRUE),
-              sd(smarts_df$iptw, na.rm = TRUE))
+              sd(smarts_df$iptw, na.rm = TRUE),
+              sd(smarts_df$smr, na.rm = TRUE))
   )
 
   # Combine results
   results <- data.frame(
-    situation = c(rep("Baseline", 4), rep("SMARTS", 4)),
-    method = rep(c("Naive", "Adj", "PSM", "IPTW"), 2),
-    mean_hr = c(hr_b_naive, hr_b_adj, hr_b_psm, hr_b_iptw,
+    situation = c(rep("Baseline", 5), rep("SMARTS", 5)),
+    method = rep(c("Naive", "Adj", "PSM", "IPTW", "SMR"), 2),
+    mean_hr = c(hr_b_naive, hr_b_adj, hr_b_psm, hr_b_iptw, hr_b_smr,
                 smarts_summary$mean_hr),
-    sd_hr = c(NA, NA, NA, NA, smarts_summary$sd_hr),
-    bias = c(hr_b_naive - 0.5, hr_b_adj - 0.5, hr_b_psm - 0.5, hr_b_iptw - 0.5,
+    sd_hr = c(NA, NA, NA, NA, NA, smarts_summary$sd_hr),
+    bias = c(hr_b_naive - 0.5, hr_b_adj - 0.5, hr_b_psm - 0.5, hr_b_iptw - 0.5, hr_b_smr - 0.5,
              smarts_summary$mean_hr - 0.5)
   )
 
