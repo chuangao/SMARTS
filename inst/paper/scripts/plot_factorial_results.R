@@ -10,7 +10,7 @@ library(dplyr)
 raw <- readRDS("../output/factorial_results_raw.rds")
 
 # Set factor levels for proper ordering
-raw$method <- factor(raw$method, levels = c("Naive", "Adj", "PSM", "IPTW"))
+raw$method <- factor(raw$method, levels = c("Naive", "Adj", "PSM", "IPTW", "SMR"))
 raw$situation <- factor(raw$situation, levels = c("Baseline", "SMARTS"))
 raw$hazard_type <- factor(raw$hazard_type,
                           levels = c("accelerating", "constant"),
