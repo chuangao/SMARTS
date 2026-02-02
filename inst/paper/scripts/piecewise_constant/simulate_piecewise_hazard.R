@@ -56,35 +56,19 @@ generate_piecewise_events <- function(t_start, t_end, segment_hazards,
 
     t_next <- t_current + inter_arrival
 
-    # Check if event occurs in this segment
-    if (t_next < seg_end && t_next < t_end) {
-      # Check if we cross treatment boundary
-      if (t_current < treatment_start && t_next >= treatment_start) {
-        # Event crosses treatment boundary - need to handle carefully
-        # Simulate remaining time in pre-treatment period
-        time_to_boundary <- treatment_start - t_current
-        prob_event_before <- 1 - exp(-hazard * time_to_boundary)
+    # Determine the effective boundary (earliest of segment end, follow-up end, treatment start if applicable)
+    effective_end <- min(seg_end, t_end)
+    if (t_current < treatment_start) {
+      effective_end <- min(effective_end, treatment_start)
+    }
 
-        if (runif(1) < prob_event_before) {
-          # Event before treatment starts
-          t_event <- t_current + rexp(1, rate = hazard)
-          t_event <- min(t_event, treatment_start - 1e-10)
-          if (t_event < t_end) {
-            event_times <- c(event_times, t_event)
-          }
-          t_current <- t_event
-        } else {
-          # No event before treatment, continue from boundary
-          t_current <- treatment_start
-        }
-      } else {
-        # Normal case - event in same treatment period
-        event_times <- c(event_times, t_next)
-        t_current <- t_next
-      }
+    if (t_next < effective_end) {
+      # Event happens before any boundary
+      event_times <- c(event_times, t_next)
+      t_current <- t_next
     } else {
-      # No event in this segment, move to next segment
-      t_current <- seg_end
+      # No event before boundary, move to the boundary
+      t_current <- effective_end
     }
   }
   return(event_times)
