@@ -36,6 +36,19 @@ inst/paper/scripts/
 | `plot_factorial_results.R` | Generates boxplot visualization of simulation results |
 | `plot_km_curves.R` | Generates Kaplan-Meier curves for the paper |
 
+### Piecewise Constant Hazard Simulation
+
+The `inst/paper/scripts/piecewise_constant/` folder contains simulations with **time-varying baseline hazard**. This tests SMARTS under realistic conditions where event rates change over calendar time.
+
+| Script | Description |
+|--------|-------------|
+| `simulate_piecewise_hazard.R` | Simulates recurring events with piecewise constant hazard |
+| `run_piecewise_scenarios.R` | Runs 4 clinical scenarios × 3 hazard trends |
+| `plot_km_curves.R` | Generates KM curves comparing methods |
+| `plot_results.R` | Generates boxplot comparing Baseline vs SMARTS |
+
+**Key findings**: When baseline hazard changes over time (increasing or decreasing), the Baseline method is biased because it compares events from different time periods. SMARTS aligns comparison periods and substantially reduces this bias.
+
 ### Output Files
 
 All simulation results and plots are saved to `inst/paper/output/`.
