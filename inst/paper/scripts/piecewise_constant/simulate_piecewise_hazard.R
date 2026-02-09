@@ -20,6 +20,42 @@ generate_piecewise_events <- function(t_start, t_end, segment_hazards,
   # segment_times: vector of segment boundaries (including 0 and max time)
   # treatment_effect: log HR for treatment (applied after treatment_start)
   # treatment_start: time when treatment effect begins (for switchers)
+  
+  # Here's a concrete example with max_time = 3 and segment_length = 0.5:
+
+  # segment_times <- seq(0, max_time + segment_length, by = segment_length)
+  # # segment_times = [0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+  # #                  ^   ^    ^    ^    ^    ^    ^    ^
+  # #               idx 1   2    3    4    5    6    7
+  # 
+  # n_segments <- length(segment_times) - 1  # = 7
+  # 
+  # The segments are:
+  # ┌─────────┬─────────┬───────────────┬──────────────────────────┐
+  # │ Segment │ seg_idx │ Time interval │ segment_hazards[seg_idx] │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 1       │ 1       │ [0, 0.5)      │ h1                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 2       │ 2       │ [0.5, 1.0)    │ h2                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 3       │ 3       │ [1.0, 1.5)    │ h3                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 4       │ 4       │ [1.5, 2.0)    │ h4                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 5       │ 5       │ [2.0, 2.5)    │ h5                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 6       │ 6       │ [2.5, 3.0)    │ h6                       │
+  # ├─────────┼─────────┼───────────────┼──────────────────────────┤
+  # │ 7       │ 7       │ [3.0, 3.5]    │ h7                       │
+  # └─────────┴─────────┴───────────────┴──────────────────────────┘
+  # The findInterval() function returns which interval a time falls into:
+  # 
+  # findInterval(0.3, segment_times)   # returns 1 (in segment [0, 0.5))
+  # findInterval(0.5, segment_times)   # returns 2 (in segment [0.5, 1.0))
+  # findInterval(1.2, segment_times)   # returns 3 (in segment [1.0, 1.5))
+  # findInterval(2.9, segment_times)   # returns 6 (in segment [2.5, 3.0))
+  # 
+  # So seg_idx tells you which hazard rate to use for the current time point.
 
   if (t_end <= t_start) return(numeric(0))
 
@@ -29,7 +65,7 @@ generate_piecewise_events <- function(t_start, t_end, segment_hazards,
   while (t_current < t_end) {
     # Find which segment we're in
     seg_idx <- findInterval(t_current, segment_times, rightmost.closed = TRUE)
-    seg_idx <- max(1, min(seg_idx, length(segment_hazards)))
+    seg_idx <- max(1, min(seg_idx, length(segment_hazards))) ## protect for edge cases
 
     # Get segment end time
     seg_end <- if (seg_idx < length(segment_times)) segment_times[seg_idx + 1] else Inf

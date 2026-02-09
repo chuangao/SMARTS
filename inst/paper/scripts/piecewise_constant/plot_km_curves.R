@@ -1,67 +1,69 @@
 # ============================================================================
 # Plot Kaplan-Meier Curves for Piecewise Constant Hazard Simulation
 # ============================================================================
-# Publication-ready KM curves showing:
-# - Row 1: Pre-switch period
-# - Row 2: Post-switch period
-# Columns: True simulation, Baseline method, SMARTS method
+# Scenario: Sicker switchers, treatment helps (gap=0.5, HR=0.7)
+# Using INCREASING hazard trend to demonstrate SMARTS advantage
+#
+# Layout: A,B (True), C (No pseudo-switch), D,E (pseudo-switch),
+#         F,G (PSM), H,I (IPTW)
 # ============================================================================
 
 library(survival)
 library(survminer)
 library(ggplot2)
 library(ggpubr)
+library(MatchIt)
 library(MASS)
 library(cowplot)
-library(patchwork)  # Load after MASS so patchwork::area is not masked
+library(patchwork)
 library(SMARTS)
 library(dplyr)
 
 source("simulate_piecewise_hazard.R")
 
 # ============================================================================
-# Simulate Data with Increasing Hazard Trend
+# Simulate Data
 # ============================================================================
 
 set.seed(123)
 data <- simulate_piecewise_hazard(
-
-  n_pairs = 3000,
-  beta_treatment = log(0.7),       # True HR = 0.7
+  n_pairs = 5000,
+  beta_treatment = log(0.7),
   beta_confounder = log(2.0),
-  base_hazard = 0.02,
+  base_hazard = 0.01,             # Lower base hazard
   hazard_trend = "increasing",
-  trend_strength = 0.3,
+  trend_strength = 0.5,           # Stronger trend for visible variation
   segment_length = 0.5,
-  confounder_gap = 0.5             # Switchers sicker (higher confounder)
+  confounder_gap = 0.5  # Sicker switchers
 )
 
-# Add group labels
-data$group <- factor(ifelse(data$cohort == "switcher", "Switcher", "Continuer"),
-                     levels = c("Continuer", "Switcher"))
+# Add treatment indicator and confounder column
 data$treated <- as.numeric(data$cohort == "switcher")
+data$confounder <- data$confounder_at_switch
+data$group <- factor(ifelse(data$treated == 1, "Switcher", "Continuer"),
+                     levels = c("Continuer", "Switcher"))
 
 switchers <- data[data$cohort == "switcher", ]
 continuers <- data[data$cohort == "continuer", ]
 
 cat("=== Simulation Summary ===\n")
-cat("True HR:", 0.7, "\n")
+cat("Scenario: Sicker switchers, treatment helps\n")
+cat("True HR:", 0.7, "| Confounder HR:", 2.0, "| Confounder gap:", 0.5, "\n")
 cat("Hazard trend: Increasing\n")
-cat("Switchers:", nrow(switchers), "| Post-event rate:", round(mean(switchers$has_post_event)*100, 1), "%\n")
-cat("Continuers:", nrow(continuers), "| Post-event rate:", round(mean(continuers$has_post_event)*100, 1), "%\n")
+cat("Switchers:", nrow(switchers), "| Continuers:", nrow(continuers), "\n")
 
 # ============================================================================
-# Prepare Datasets for KM Curves
+# Prepare Datasets
 # ============================================================================
 
-# --- Dataset A: True Pre-switch (time to first pre-switch event) ---
+# --- Dataset A: Pre-switching (True simulation) ---
 data_A <- data.frame(
   time = ifelse(data$has_pre_event, data$first_pre_event_time, data$switch_time),
   event = as.numeric(data$has_pre_event),
   group = data$group
 )
 
-# --- Dataset B: True Post-switch (time from switch to first post-switch event) ---
+# --- Dataset B: Post-switching (True simulation) ---
 data_B <- data.frame(
   time = ifelse(data$has_post_event,
                 data$first_post_event_time - data$switch_time,
@@ -70,9 +72,7 @@ data_B <- data.frame(
   group = data$group
 )
 
-# --- Dataset C: Baseline method (misaligned - continuers from time 0) ---
-# Switchers: post-switch events from switch time
-# Continuers: any event from time 0
+# --- Dataset C: No pseudo-switch (misaligned Baseline) ---
 first_event_cont <- ifelse(continuers$has_pre_event,
                            continuers$first_pre_event_time,
                            ifelse(continuers$has_post_event,
@@ -93,12 +93,13 @@ data_C <- data.frame(
   ),
   group = factor(c(rep("Switcher", nrow(switchers)),
                    rep("Continuer", nrow(continuers))),
-                 levels = c("Continuer", "Switcher")),
-  confounder = c(switchers$confounder_at_switch,
-                 continuers$conf_t0)
+                 levels = c("Continuer", "Switcher"))
 )
 
-# --- SMARTS: Assign pseudo-switch times to continuers ---
+# ============================================================================
+# SMARTS: Assign pseudo-switch times
+# ============================================================================
+
 switchers_smarts <- switchers
 switchers_smarts$swi_yrs <- switchers_smarts$switch_time
 switchers_smarts$fup_yrs <- switchers_smarts$T_max
@@ -127,7 +128,7 @@ swi_assigned$new_switch_time <- swi_assigned$switch_time
 cont_assigned <- rederive_events_recurring(cont_assigned, "new_switch_time")
 swi_assigned <- rederive_events_recurring(swi_assigned, "new_switch_time")
 
-# --- Dataset D: SMARTS Pre-switch ---
+# --- Datasets D, E: Assign pseudo-switch ---
 data_D <- data.frame(
   time = c(
     ifelse(swi_assigned$new_has_pre_event,
@@ -146,7 +147,6 @@ data_D <- data.frame(
                  levels = c("Continuer", "Switcher"))
 )
 
-# --- Dataset E: SMARTS Post-switch ---
 data_E <- data.frame(
   time = c(
     ifelse(swi_assigned$new_has_post_event,
@@ -162,14 +162,99 @@ data_E <- data.frame(
   ),
   group = factor(c(rep("Switcher", nrow(swi_assigned)),
                    rep("Continuer", nrow(cont_assigned))),
-                 levels = c("Continuer", "Switcher")),
-  confounder = c(swi_assigned$confounder_at_switch,
-                 cont_assigned$confounder_at_switch)
+                 levels = c("Continuer", "Switcher"))
 )
 
-# Filter out invalid times
-data_D <- data_D[data_D$time > 0, ]
-data_E <- data_E[data_E$time > 0, ]
+# ============================================================================
+# Propensity Score Matching
+# ============================================================================
+
+# Combine assigned data for PSM
+smarts_combined <- rbind(
+  data.frame(
+    id = swi_assigned$id,
+    treated = 1,
+    confounder = swi_assigned$confounder_at_switch,
+    new_has_pre_event = swi_assigned$new_has_pre_event,
+    new_first_pre_event_time = swi_assigned$new_first_pre_event_time,
+    new_switch_time = swi_assigned$new_switch_time,
+    new_has_post_event = swi_assigned$new_has_post_event,
+    new_post_event_time_from_switch = swi_assigned$new_post_event_time_from_switch,
+    T_max = swi_assigned$T_max
+  ),
+  data.frame(
+    id = cont_assigned$id,
+    treated = 0,
+    confounder = cont_assigned$confounder_at_switch,
+    new_has_pre_event = cont_assigned$new_has_pre_event,
+    new_first_pre_event_time = cont_assigned$new_first_pre_event_time,
+    new_switch_time = cont_assigned$new_switch_time,
+    new_has_post_event = cont_assigned$new_has_post_event,
+    new_post_event_time_from_switch = cont_assigned$new_post_event_time_from_switch,
+    T_max = cont_assigned$T_max
+  )
+)
+
+ps_model <- glm(treated ~ confounder, data = smarts_combined, family = binomial)
+smarts_combined$ps <- predict(ps_model, type = "response")
+
+match_out <- matchit(treated ~ confounder, data = smarts_combined,
+                     method = "nearest", caliper = 0.1)
+data_matched <- match.data(match_out)
+data_matched$group <- factor(ifelse(data_matched$treated == 1, "Switcher", "Continuer"),
+                             levels = c("Continuer", "Switcher"))
+
+cat("  PSM matched:", nrow(data_matched), "\n")
+
+# --- Dataset F: Pre-switching (PSM) ---
+data_F <- data.frame(
+  time = ifelse(data_matched$new_has_pre_event,
+                data_matched$new_first_pre_event_time,
+                data_matched$new_switch_time),
+  event = as.numeric(data_matched$new_has_pre_event),
+  group = data_matched$group
+)
+
+# --- Dataset G: Post-switching (PSM) ---
+data_G <- data.frame(
+  time = ifelse(data_matched$new_has_post_event,
+                data_matched$new_post_event_time_from_switch,
+                data_matched$T_max - data_matched$new_switch_time),
+  event = as.numeric(data_matched$new_has_post_event),
+  group = data_matched$group
+)
+
+# ============================================================================
+# IPTW Weights
+# ============================================================================
+
+p_treated <- mean(smarts_combined$treated)
+smarts_combined$weight <- ifelse(smarts_combined$treated == 1,
+                                  p_treated / smarts_combined$ps,
+                                  (1 - p_treated) / (1 - smarts_combined$ps))
+
+smarts_combined$group <- factor(ifelse(smarts_combined$treated == 1, "Switcher", "Continuer"),
+                                levels = c("Continuer", "Switcher"))
+
+# --- Dataset H: Pre-switching (IPTW) ---
+data_H <- data.frame(
+  time = ifelse(smarts_combined$new_has_pre_event,
+                smarts_combined$new_first_pre_event_time,
+                smarts_combined$new_switch_time),
+  event = as.numeric(smarts_combined$new_has_pre_event),
+  group = smarts_combined$group,
+  weight = smarts_combined$weight
+)
+
+# --- Dataset I: Post-switching (IPTW) ---
+data_I <- data.frame(
+  time = ifelse(smarts_combined$new_has_post_event,
+                smarts_combined$new_post_event_time_from_switch,
+                smarts_combined$T_max - smarts_combined$new_switch_time),
+  event = as.numeric(smarts_combined$new_has_post_event),
+  group = smarts_combined$group,
+  weight = smarts_combined$weight
+)
 
 # ============================================================================
 # Custom Theme and Colors
@@ -177,6 +262,7 @@ data_E <- data_E[data_E$time > 0, ]
 
 color_continuer <- "#E69F00"
 color_switcher <- "#0072B2"
+colors <- c(color_continuer, color_switcher)
 
 theme_km <- function() {
   theme_pubr(base_size = 12) +
@@ -197,10 +283,16 @@ theme_km <- function() {
 # Plot Function
 # ============================================================================
 
-create_km_plot <- function(data, title, panel_label,
-                           xlim = c(0, 5), show_ylabel = TRUE) {
+create_km_plot <- function(data, title, panel_label, weighted = FALSE,
+                           xlim = c(0, 4), show_ylabel = TRUE) {
 
-  fit <- survfit(Surv(time, event) ~ group, data = data)
+  data <- data[data$time > 0 & !is.na(data$time), ]
+
+  if (weighted && "weight" %in% names(data)) {
+    fit <- survfit(Surv(time, event) ~ group, data = data, weights = weight)
+  } else {
+    fit <- survfit(Surv(time, event) ~ group, data = data)
+  }
 
   p <- ggsurvplot(
     fit,
@@ -213,9 +305,9 @@ create_km_plot <- function(data, title, panel_label,
     censor = FALSE,
     legend = "none",
     xlim = xlim,
-    ylim = c(0.4, 1.05),
+    ylim = c(0.25, 1.05),
     break.x.by = 1,
-    break.y.by = 0.2,
+    break.y.by = 0.25,
     xlab = "",
     ylab = ""
   )
@@ -224,15 +316,15 @@ create_km_plot <- function(data, title, panel_label,
     theme_km() +
     ggtitle(title) +
     scale_y_continuous(
-      limits = c(0.4, 1.05),
-      breaks = c(0.4, 0.6, 0.8, 1.0),
-      labels = c("0.40", "0.60", "0.80", "1.00")
+      limits = c(0.25, 1.05),
+      breaks = c(0.25, 0.50, 0.75, 1.00),
+      labels = c("0.25", "0.50", "0.75", "1.00")
     ) +
     annotate("text", x = xlim[1], y = 1.02, label = panel_label,
              hjust = 0, vjust = 0, size = 4.5, fontface = "bold")
 
   if (show_ylabel) {
-    plot <- plot + ylab("Event-free probability")
+    plot <- plot + ylab("Survival probability")
   } else {
     plot <- plot + theme(axis.title.y = element_blank())
   }
@@ -250,43 +342,52 @@ cat("\nGenerating plots...\n")
 p_A <- create_km_plot(data_A, "True simulation\npre-switch", "A",
                       xlim = c(0, 4), show_ylabel = TRUE)
 
-p_D <- create_km_plot(data_D, "SMARTS\npre-switch", "D",
+p_C <- create_km_plot(data_C, "No pseudo-switch", "C",
+                      xlim = c(0, 6), show_ylabel = FALSE)
+
+p_D <- create_km_plot(data_D, "Assign pseudo-switch\npre-switch", "D",
+                      xlim = c(0, 5), show_ylabel = FALSE)
+
+p_F <- create_km_plot(data_F, "Assign pseudo-switch\npre-switch + PSM", "F",
                       xlim = c(0, 4), show_ylabel = FALSE)
+
+p_H <- create_km_plot(data_H, "Assign pseudo-switch\npre-switch + IPTW", "H",
+                      weighted = TRUE, xlim = c(0, 4), show_ylabel = FALSE)
 
 # Row 2: Post-switch plots
 p_B <- create_km_plot(data_B, "True simulation\npost-switch", "B",
-                      xlim = c(0, 5), show_ylabel = TRUE)
+                      xlim = c(0, 4), show_ylabel = TRUE)
 
-p_C <- create_km_plot(data_C, "Baseline method\n(misaligned)", "C",
-                      xlim = c(0, 6), show_ylabel = FALSE)
-
-p_E <- create_km_plot(data_E, "SMARTS\npost-switch", "E",
+p_E <- create_km_plot(data_E, "Assign pseudo-switch\npost-switch", "E",
                       xlim = c(0, 5), show_ylabel = FALSE)
 
+p_G <- create_km_plot(data_G, "Assign pseudo-switch\npost-switch + PSM", "G",
+                      xlim = c(0, 4), show_ylabel = FALSE)
+
+p_I <- create_km_plot(data_I, "Assign pseudo-switch\npost-switch + IPTW", "I",
+                      weighted = TRUE, xlim = c(0, 4), show_ylabel = FALSE)
+
 # ============================================================================
-# Combine Plots
+# Combine Plots using patchwork
 # ============================================================================
 
-# Layout: 2 rows x 3 columns
-# Row 1: A (True pre), placeholder, D (SMARTS pre)
-# Row 2: B (True post), C (Baseline), E (SMARTS post)
-
+# Layout: C (No pseudo-switch) spans both rows in column 2
 layout <- c(
-  area(1, 1),  # A
-  area(1, 2),  # placeholder (will use spacer)
-  area(1, 3),  # D
-  area(2, 1),  # B
-  area(2, 2),  # C
-  area(2, 3)   # E
+  area(1, 1),       # A: row 1, col 1
+  area(2, 1),       # B: row 2, col 1
+  area(1, 2, 2, 2), # C: rows 1-2, col 2 (spans both rows)
+  area(1, 3),       # D: row 1, col 3
+  area(2, 3),       # E: row 2, col 3
+  area(1, 4),       # F: row 1, col 4
+  area(2, 4),       # G: row 2, col 4
+  area(1, 5),       # H: row 1, col 5
+  area(2, 5)        # I: row 2, col 5
 )
 
-# Create a spacer plot
-spacer <- ggplot() + theme_void()
-
-main_plot <- p_A + spacer + p_D + p_B + p_C + p_E +
+main_plot <- p_A + p_B + p_C + p_D + p_E + p_F + p_G + p_H + p_I +
   plot_layout(design = layout)
 
-# Create legend
+# Create a standalone legend
 legend_plot <- ggplot(data.frame(x = 1:2, y = 1:2), aes(x, y)) +
   geom_line(aes(color = "Continuer", linetype = "Continuer"), linewidth = 1.2, alpha = 0.8) +
   geom_line(aes(color = "Switcher", linetype = "Switcher"), linewidth = 1.2, alpha = 0.8) +
@@ -319,42 +420,22 @@ final_plot <- legend_wrap / main_plot +
 # ============================================================================
 
 ggsave("km_curves_piecewise.pdf", final_plot,
-       width = 12, height = 6, units = "in", dpi = 300)
+       width = 14, height = 5.5, units = "in", dpi = 300)
 
 ggsave("km_curves_piecewise.png", final_plot,
-       width = 12, height = 6, units = "in", dpi = 300)
+       width = 14, height = 5.5, units = "in", dpi = 300)
 
 cat("\nPlots saved to:\n")
 cat("  - km_curves_piecewise.pdf\n")
-cat("  - km_curves_piecewise.png\n")
+cat("  - km_curves_piecewise.png (300 dpi)\n")
 
 # ============================================================================
-# Summary: Hazard Ratios from Each Method
+# Summary Statistics
 # ============================================================================
 
-cat("\n=== Hazard Ratio Estimates ===\n")
-cat("True HR: 0.7\n\n")
-
-# Baseline method
-baseline_data <- data_C
-baseline_data <- baseline_data[baseline_data$time > 0, ]
-baseline_data$treated <- as.numeric(baseline_data$group == "Switcher")
-
-cox_baseline_naive <- coxph(Surv(time, event) ~ treated, data = baseline_data)
-cox_baseline_adj <- coxph(Surv(time, event) ~ treated + confounder, data = baseline_data)
-
-cat("Baseline (misaligned):\n")
-cat("  Naive:    ", round(exp(coef(cox_baseline_naive)["treated"]), 3), "\n")
-cat("  Adjusted: ", round(exp(coef(cox_baseline_adj)["treated"]), 3), "\n")
-
-# SMARTS method
-smarts_data <- data_E
-smarts_data <- smarts_data[smarts_data$time > 0 & !is.na(smarts_data$time), ]
-smarts_data$treated <- as.numeric(smarts_data$group == "Switcher")
-
-cox_smarts_naive <- coxph(Surv(time, event) ~ treated, data = smarts_data)
-cox_smarts_adj <- coxph(Surv(time, event) ~ treated + confounder, data = smarts_data)
-
-cat("\nSMARTS (aligned):\n")
-cat("  Naive:    ", round(exp(coef(cox_smarts_naive)["treated"]), 3), "\n")
-cat("  Adjusted: ", round(exp(coef(cox_smarts_adj)["treated"]), 3), "\n")
+cat("\n=== Summary Statistics ===\n")
+cat("True HR = 0.7, Confounder HR = 2.0, Hazard trend = Increasing\n")
+cat("\nSample sizes:\n")
+cat("  All subjects:", nrow(data), "\n")
+cat("  SMARTS assigned:", nrow(smarts_combined), "\n")
+cat("  PSM matched:", nrow(data_matched), "\n")

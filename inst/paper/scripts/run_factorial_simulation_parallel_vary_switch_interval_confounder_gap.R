@@ -258,7 +258,7 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
 run_scenario <- function(
   switch_start, switch_end,
   gap_baseline, gap_peak, gap_end,
-  shape,
+  shape_continuer, shape_switcher_pre, shape_switcher_post,
   n_pairs = 1000,
   n_datasets = 10,
   n_assignments = 1000,
@@ -279,7 +279,9 @@ run_scenario <- function(
       beta_treatment = log(0.5),
       beta_confounder = log(1.3),
       lambda_0 = 10,
-      shape = shape,
+      shape_continuer = shape_continuer,
+      shape_switcher_pre = shape_switcher_pre,
+      shape_switcher_post = shape_switcher_post,
       T_min = 2,
       T_max = 6,
       switch_start = switch_start,
@@ -324,27 +326,34 @@ run_factorial_parallel <- function(
     homogeneous = c(gap_baseline = 0.9, gap_peak = 1.1, gap_end = 0.9)
   )
 
-  hazard_shapes <- c(accelerating = 1.5, constant = 1)
+  # Hazard configurations with differentiated shapes
+  hazard_configs <- list(
+    realistic = c(shape_continuer = 0.9, shape_switcher_pre = 1.4, shape_switcher_post = 0.7),
+    constant = c(shape_continuer = 1.0, shape_switcher_pre = 1.0, shape_switcher_post = 1.0)
+  )
 
   all_results <- list()
   scenario_num <- 0
-  total_scenarios <- length(switch_intervals) * length(confounder_trajectories) * length(hazard_shapes)
+  total_scenarios <- length(switch_intervals) * length(confounder_trajectories) * length(hazard_configs)
 
   start_time <- Sys.time()
 
   for (sw in switch_intervals) {
     for (conf_name in names(confounder_trajectories)) {
-      for (hz_name in names(hazard_shapes)) {
+      for (hz_name in names(hazard_configs)) {
         scenario_num <- scenario_num + 1
 
         conf <- confounder_trajectories[[conf_name]]
-        hz <- hazard_shapes[[hz_name]]
+        hz <- hazard_configs[[hz_name]]
 
         cat("\n========================================\n")
         cat("Scenario", scenario_num, "/", total_scenarios, "\n")
         cat("Switch:", sw[1], "-", sw[2], "\n")
         cat("Confounder:", conf_name, "\n")
         cat("Hazard:", hz_name, "\n")
+        cat("  - Continuer shape:", hz["shape_continuer"], "\n")
+        cat("  - Switcher pre-switch shape:", hz["shape_switcher_pre"], "\n")
+        cat("  - Switcher post-switch shape:", hz["shape_switcher_post"], "\n")
         cat("========================================\n")
 
         result <- run_scenario(
@@ -353,7 +362,9 @@ run_factorial_parallel <- function(
           gap_baseline = conf["gap_baseline"],
           gap_peak = conf["gap_peak"],
           gap_end = conf["gap_end"],
-          shape = hz,
+          shape_continuer = hz["shape_continuer"],
+          shape_switcher_pre = hz["shape_switcher_pre"],
+          shape_switcher_post = hz["shape_switcher_post"],
           n_pairs = n_pairs,
           n_datasets = n_datasets,
           n_assignments = n_assignments,
