@@ -14,6 +14,18 @@
 #     gap_baseline → gap_at_switch (peak) → gap_end
 # - Confounder values at nearby time points are correlated (MVN)
 #
+# EVENT GENERATION uses FIXED confounder values (not time-varying):
+# - PRE-SWITCH: Use confounder at baseline (t=0)
+#     (captures initial risk status)
+# - POST-SWITCH: Use confounder at switch time
+#     (captures risk when comparison begins)
+#     (post-switch confounder changes are CAUSED BY treatment = mediator)
+#
+# This approach:
+# - Avoids mediator adjustment issue
+# - Creates clean confounding structure
+# - Still allows time-varying confounding in the GAP between groups
+#
 # ============================================================================
 
 library(MASS)  # For mvrnorm
@@ -54,15 +66,23 @@ calculate_switcher_gap <- function(t, t_switch, t_max,
 
 # ============================================================================
 # Generate events with piecewise constant hazard
-# Now uses time-varying confounder
+# Uses FIXED confounder values for event generation:
+#   - PRE-SWITCH: Use confounder at baseline (t=0)
+#   - POST-SWITCH: Use confounder at switch time
+#
+# KEY INSIGHT:
+# - Pre-switch: Baseline confounder captures initial risk status
+# - Post-switch: Confounder at switch captures risk when comparison begins
+# - Post-switch confounder CHANGES are caused BY treatment (mediator),
+#   so we don't use time-varying values after switch
 # ============================================================================
-generate_piecewise_events_varying <- function(t_start, t_end, segment_hazards,
-                                               segment_times,
-                                               confounder_values,  # vector of confounder at each segment
-                                               confounder_times,   # time points for confounder
-                                               beta_confounder,
-                                               treatment_effect = 0,
-                                               treatment_start = Inf) {
+generate_piecewise_events_fixed <- function(t_start, t_end, segment_hazards,
+                                             segment_times,
+                                             confounder_pre,   # fixed confounder for pre-switch
+                                             confounder_post,  # fixed confounder for post-switch
+                                             beta_confounder,
+                                             treatment_effect = 0,
+                                             treatment_start = Inf) {
 
   if (t_end <= t_start) return(numeric(0))
 
@@ -81,10 +101,14 @@ generate_piecewise_events_varying <- function(t_start, t_end, segment_hazards,
     # Base hazard for this segment
     base_hazard <- segment_hazards[seg_idx]
 
-    # Get confounder value for current time (use nearest time point)
-    conf_idx <- findInterval(t_current, confounder_times, rightmost.closed = TRUE)
-    conf_idx <- max(1, min(conf_idx, length(confounder_values)))
-    current_confounder <- confounder_values[conf_idx]
+    # Get confounder value:
+    # - PRE-TREATMENT: use baseline confounder (confounder_pre)
+    # - POST-TREATMENT: use confounder at switch time (confounder_post)
+    if (t_current < treatment_start) {
+      current_confounder <- confounder_pre
+    } else {
+      current_confounder <- confounder_post
+    }
 
     # Apply confounder effect
     linear_pred <- beta_confounder * current_confounder
@@ -276,6 +300,9 @@ simulate_piecewise_hazard <- function(
 
   # ============================================================================
   # GENERATE RECURRING EVENTS
+  # Uses FIXED confounder values:
+  #   - PRE-SWITCH: confounder at baseline (t=0)
+  #   - POST-SWITCH: confounder at switch time
   # ============================================================================
   all_events <- vector("list", n_total)
 
@@ -284,8 +311,9 @@ simulate_piecewise_hazard <- function(
     t_switch <- switch_time[i]
     t_max_i <- T_i[i]
 
-    # Get this person's confounder trajectory
-    conf_values <- confounder_matrix[i, ]
+    # Get confounder values for this person
+    conf_at_baseline <- confounder_matrix[i, 1]  # t=0
+    conf_at_switch_i <- confounder_at_switch[i]   # at switch time
 
     # Treatment effect and start time
     if (is_switcher) {
@@ -297,13 +325,15 @@ simulate_piecewise_hazard <- function(
     }
 
     # Generate all events for this person
-    events <- generate_piecewise_events_varying(
+    # PRE-SWITCH: uses confounder at baseline (initial risk)
+    # POST-SWITCH: uses confounder at switch (risk at comparison start)
+    events <- generate_piecewise_events_fixed(
       t_start = 0,
       t_end = t_max_i,
       segment_hazards = hazard_schedule$hazards,
       segment_times = hazard_schedule$times,
-      confounder_values = conf_values,
-      confounder_times = time_points,
+      confounder_pre = conf_at_baseline,
+      confounder_post = conf_at_switch_i,
       beta_confounder = beta_confounder,
       treatment_effect = treatment_effect,
       treatment_start = treatment_start

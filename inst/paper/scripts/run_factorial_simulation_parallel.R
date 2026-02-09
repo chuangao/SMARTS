@@ -3,18 +3,45 @@
 # ============================================================================
 #
 # Design:
-# - 4 scenarios: 2 hazard types × 2 confounding levels
+# - 8 clinical scenarios representing different reasons for treatment switching
+# - Each scenario has its own true treatment effect (HR)
 # - 10 data sets per scenario
 # - 1000 random assignments per data set (parallelized)
 #
-# Factors:
-# - Hazard: Accelerating (1.5) vs Constant (1)
-# - Confounding: None (beta=0, gap=0) vs Present (beta=log(1.3), gap=1.6)
+# The 8 Clinical Scenarios (Proportional Hazards Version):
+# ──────────────────────────────────────────────────────────────────────────────
+# | # | Shape | Pre HR | Post HR | Tx HR | Clinical Story                      |
+# |---|-------|--------|---------|-------|-------------------------------------|
+# | 1 |  0.9  |  1.5   |   1.3   | 0.87  | Improving, sick switch, tx helps    |
+# | 2 |  0.9  |  1.5   |   0.5   | 0.33  | Improving, sick switch, tx helps lot|
+# | 3 |  0.9  |  0.67  |   1.3   | 1.94  | Improving, healthy switch, regret   |
+# | 4 |  0.9  |  0.67  |   0.5   | 0.75  | Improving, healthy switch, stays ok |
+# | 5 |  1.2  |  1.5   |   1.3   | 0.87  | Worsening, sick switch, tx helps    |
+# | 6 |  1.2  |  1.5   |   0.5   | 0.33  | Worsening, sick switch, tx helps lot|
+# | 7 |  1.2  |  0.67  |   1.3   | 1.94  | Worsening, healthy switch, regret   |
+# | 8 |  1.2  |  0.67  |   0.5   | 0.75  | Worsening, healthy switch, stays ok |
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Key Features:
+# - Proportional Hazards maintained (same shape for all groups)
+# - MVN-correlated confounders: Corr(t1,t2) = rho^|t1-t2|
+# - gap_at_switch is the extreme point (max for sicker, min for healthier)
+# - Treatment effect varies by scenario
+#
+# MVN Correlation Structure:
+# - rho = 0: Independent confounders (original behavior)
+# - rho = 0.8 (default): Strong temporal correlation
+# - rho → 1: Nearly identical confounders across all times
+#
+# This makes SMARTS more effective because:
+# - SMARTS assigns pseudo-switch times close to actual switch times
+# - With MVN correlation, confounder at pseudo-switch ≈ confounder at switch
+# - Baseline uses t=0 confounder, which is more different from switch time
 #
 # Methods: Naive, Adj, PSM, IPTW, SMR
 # - SMR (Standardized Morbidity Ratio) weighting targets ATT among switchers
 #
-# Output: Data frame with mean, SD, bias for each data set
+# Output: Data frame with mean, SD, bias for each scenario and data set
 # ============================================================================
 
 library(survival)
@@ -140,8 +167,16 @@ run_single_assignment <- function(seed, switchers, continuers, confounder_interv
 # ============================================================================
 # Run Single Data Set (with 1000 parallel random assignments)
 # ============================================================================
+#
+# Parameters:
+#   data         - Simulated data from simulate_survival_data_confounder()
+#   true_hr      - The true hazard ratio for this scenario (for bias calculation)
+#   n_assignments - Number of SMARTS random assignments to run
+#   n_cores      - Number of cores for parallel execution
+#
+# ============================================================================
 
-run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
+run_single_dataset <- function(data, true_hr = 0.5, n_assignments = 1000, n_cores = 12) {
 
   switchers <- data[data$cohort == "switcher", ]
   continuers <- data[data$cohort == "continuer", ]
@@ -248,8 +283,10 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
     mean_hr = c(hr_b_naive, hr_b_adj, hr_b_psm, hr_b_iptw, hr_b_smr,
                 smarts_summary$mean_hr),
     sd_hr = c(NA, NA, NA, NA, NA, smarts_summary$sd_hr),
-    bias = c(hr_b_naive - 0.5, hr_b_adj - 0.5, hr_b_psm - 0.5, hr_b_iptw - 0.5, hr_b_smr - 0.5,
-             smarts_summary$mean_hr - 0.5)
+    true_hr = true_hr,
+    bias = c(hr_b_naive - true_hr, hr_b_adj - true_hr, hr_b_psm - true_hr,
+             hr_b_iptw - true_hr, hr_b_smr - true_hr,
+             smarts_summary$mean_hr - true_hr)
   )
 
   return(results)
@@ -259,10 +296,22 @@ run_single_dataset <- function(data, n_assignments = 1000, n_cores = 12) {
 # Run Single Scenario (10 data sets)
 # ============================================================================
 
+# ============================================================================
+# Run Single Scenario (using scenario configuration)
+# ============================================================================
+#
+# This function runs a single scenario configuration across multiple datasets.
+# It uses the get_scenario_config() function from simulate_survival_confounder.R
+# to get pre-defined clinical scenario parameters.
+#
+# The scenario_config now includes beta_treatment (true treatment effect),
+# which varies by scenario to match the clinical story.
+#
+# ============================================================================
 run_scenario <- function(
-  shape,
-  beta_confounder,
-  gap_peak,
+  scenario_config,           # Configuration from get_scenario_config()
+  beta_confounder = log(1.3),
+  rho = 0.8,                 # MVN temporal correlation parameter
   n_pairs = 5000,
   n_datasets = 10,
   n_assignments = 1000,
@@ -272,32 +321,41 @@ run_scenario <- function(
 
   all_results <- list()
 
+  # Get true HR from scenario config
+  true_hr <- exp(scenario_config$beta_treatment)
+
   for (ds in 1:n_datasets) {
     cat("    Data set", ds, "/", n_datasets, "\n")
 
     set.seed(base_seed + ds * 1000)
 
-    # Simulate data (confounder gap settings match KM curves)
+    # Simulate data using scenario configuration
+    # NOTE: beta_treatment comes from scenario_config, not hardcoded
+    # NOTE: rho controls MVN temporal correlation of confounders
     data <- simulate_survival_data_confounder(
       n_pairs = n_pairs,
-      beta_treatment = log(0.5),
+      beta_treatment = scenario_config$beta_treatment,  # From scenario config
       beta_confounder = beta_confounder,
       lambda_0 = 10,
-      shape = shape,
+      shape_continuer = scenario_config$shape_continuer,
+      shape_switcher_pre = scenario_config$shape_switcher_pre,
+      shape_switcher_post = scenario_config$shape_switcher_post,
       T_min = 2,
       T_max = 6,
       switch_start = 0.25,
       switch_end = 0.75,
       confounder_interval = 0.5,
       confounder_baseline_mean = 2.5,
-      confounder_gap_baseline = ifelse(gap_peak > 0, 0.5, 0),
-      confounder_gap_peak = gap_peak,
-      confounder_gap_end = ifelse(gap_peak > 0, 0.8, 0),
-      confounder_sd = 0.8
+      confounder_change_magnitude = scenario_config$confounder_change_magnitude,
+      confounder_gap_baseline = scenario_config$gap_baseline,
+      confounder_gap_at_switch = scenario_config$gap_at_switch,
+      confounder_gap_end = scenario_config$gap_end,
+      confounder_sd = 0.8,
+      rho = rho
     )
 
-    # Run analysis
-    results <- run_single_dataset(data, n_assignments, n_cores)
+    # Run analysis with scenario-specific true HR
+    results <- run_single_dataset(data, true_hr, n_assignments, n_cores)
     results$data_set <- ds
 
     all_results[[ds]] <- results
@@ -310,59 +368,87 @@ run_scenario <- function(
 # Run Full Factorial Simulation
 # ============================================================================
 
+# ============================================================================
+# Run All 8 Clinical Scenarios
+# ============================================================================
+#
+# This function runs all 8 pre-defined clinical scenarios.
+# Each scenario now has its own true treatment effect (beta_treatment/HR).
+#
+# | # | True HR | Continuer | Swi Pre | Swi Post | Clinical Story              |
+# |---|---------|-----------|---------|----------|------------------------------|
+# | 1 |   0.5   | ↓ (0.9)   | ↑ (1.2) | ≈ (0.95) | Classic medical switch       |
+# | 2 |   1.2   | ↓ (0.9)   | ↑ (1.2) | ↑ (1.15) | Failed medical switch        |
+# | 3 |   1.0   | ↓ (0.9)   | ↓ (0.9) | ↓ (0.9)  | Financial switch (healthy)   |
+# | 4 |   1.5   | ↓ (0.9)   | ↓ (0.85)| ↑ (1.1)  | Regret switch                |
+# | 5 |   0.5   | ↑ (1.2)   | ↑ (1.4) | ↑ (1.1)  | Everyone declining, helps    |
+# | 6 |   1.0   | ↑ (1.2)   | ↑ (1.3) | ↑ (1.25) | No good options              |
+# | 7 |   0.5   | ↑ (1.2)   | ≈ (1.0) | ≈ (1.0)  | Healthy responders switch    |
+# | 8 |   1.3   | ↑ (1.2)   | ≈ (1.0) | ↑ (1.25) | Healthy switch, regret       |
+#
+# ============================================================================
 run_factorial_parallel <- function(
   n_pairs = 5000,
   n_datasets = 10,
   n_assignments = 1000,
-  n_cores = 12
+  n_cores = 12,
+  rho = 0.8,                # MVN temporal correlation (0=independent, 1=identical)
+  scenarios_to_run = 1:8    # Which scenarios to run (default: all 8)
 ) {
 
-  # Define factor levels
-  hazard_shapes <- c(accelerating = 1.5, constant = 1)
-
-  confounding_levels <- list(
-    none = c(beta = 0, gap = 0),
-    present = c(beta = log(1.3), gap = 1.6)  # Match KM curves settings
-  )
-
   all_results <- list()
-  scenario_num <- 0
-  total_scenarios <- length(hazard_shapes) * length(confounding_levels)
+  total_scenarios <- length(scenarios_to_run)
+  scenario_idx <- 0
 
   start_time <- Sys.time()
 
-  for (hz_name in names(hazard_shapes)) {
-    for (conf_name in names(confounding_levels)) {
-      scenario_num <- scenario_num + 1
+  for (scenario_num in scenarios_to_run) {
+    scenario_idx <- scenario_idx + 1
 
-      hz <- hazard_shapes[[hz_name]]
-      conf <- confounding_levels[[conf_name]]
+    # Get pre-defined scenario configuration
+    config <- get_scenario_config(scenario_num)
+    true_hr <- exp(config$beta_treatment)
 
-      cat("\n========================================\n")
-      cat("Scenario", scenario_num, "/", total_scenarios, "\n")
-      cat("Hazard:", hz_name, "\n")
-      cat("Confounding:", conf_name, "\n")
-      cat("========================================\n")
+    cat("\n========================================\n")
+    cat("Scenario", scenario_num, "(", scenario_idx, "/", total_scenarios, ")\n")
+    cat("Name:", config$name, "\n")
+    cat("True HR:", round(true_hr, 2),
+        ifelse(true_hr < 1, "(beneficial)",
+               ifelse(true_hr > 1, "(harmful)", "(neutral)")), "\n")
+    cat("----------------------------------------\n")
+    cat("Continuer shape:", config$shape_continuer,
+        ifelse(config$shape_continuer < 1, "(improving)", "(worsening)"), "\n")
+    cat("Switcher pre-switch shape:", config$shape_switcher_pre,
+        ifelse(config$shape_switcher_pre < 1, "(improving)", "(worsening)"), "\n")
+    cat("Switcher post-switch shape:", config$shape_switcher_post,
+        ifelse(config$shape_switcher_post < 1, "(improving)", "(worsening)"), "\n")
+    cat("----------------------------------------\n")
+    cat("Gap trajectory:", config$gap_baseline, "→",
+        config$gap_at_switch, "→", config$gap_end, "\n")
+    cat("========================================\n")
 
-      result <- run_scenario(
-        shape = hz,
-        beta_confounder = conf["beta"],
-        gap_peak = conf["gap"],
-        n_pairs = n_pairs,
-        n_datasets = n_datasets,
-        n_assignments = n_assignments,
-        n_cores = n_cores
-      )
+    result <- run_scenario(
+      scenario_config = config,
+      beta_confounder = log(1.3),
+      rho = rho,
+      n_pairs = n_pairs,
+      n_datasets = n_datasets,
+      n_assignments = n_assignments,
+      n_cores = n_cores
+    )
 
-      result$hazard_type <- hz_name
-      result$confounding <- conf_name
+    # Add scenario identifiers
+    result$scenario_num <- scenario_num
+    result$scenario_name <- config$name
+    result$shape_continuer <- config$shape_continuer
+    result$shape_switcher_pre <- config$shape_switcher_pre
+    result$shape_switcher_post <- config$shape_switcher_post
 
-      all_results[[scenario_num]] <- result
+    all_results[[scenario_idx]] <- result
 
-      # Progress update
-      elapsed <- difftime(Sys.time(), start_time, units = "mins")
-      cat("  Elapsed time:", round(elapsed, 1), "minutes\n")
-    }
+    # Progress update
+    elapsed <- difftime(Sys.time(), start_time, units = "mins")
+    cat("  Elapsed time:", round(elapsed, 1), "minutes\n")
   }
 
   final_results <- do.call(rbind, all_results)
@@ -384,7 +470,7 @@ summarize_results <- function(results) {
 
   # Aggregate over data sets
   summary_df <- results %>%
-    group_by(hazard_type, confounding, situation, method) %>%
+    group_by(scenario_num, scenario_name, true_hr, situation, method) %>%
     summarise(
       mean_hr_avg = mean(mean_hr, na.rm = TRUE),
       mean_hr_sd = sd(mean_hr, na.rm = TRUE),
@@ -407,12 +493,16 @@ if (interactive()) {
   cat("FACTORIAL SIMULATION STUDY (Parallel)\n")
   cat("========================================\n")
   cat("Settings:\n")
-  cat("  - Scenarios: 4 (2 hazard × 2 confounding)\n")
+  cat("  - Scenarios: 8 clinical scenarios\n")
+  cat("  - Each scenario has its own true HR\n")
   cat("  - Data sets per scenario: 10\n")
   cat("  - Random assignments per data set: 1000\n")
   cat("  - Cores: 12\n")
   cat("  - Sample size: 10,000 patients\n")
   cat("========================================\n\n")
+
+  # Print scenario summary
+  print_scenario_summary()
 
   # Run simulation
   results <- run_factorial_parallel(
@@ -436,7 +526,7 @@ if (interactive()) {
   # Display summary
   cat("\n========================================\n")
   cat("SUMMARY RESULTS\n")
-  cat("True HR = 0.500\n")
+  cat("(True HR varies by scenario)\n")
   cat("========================================\n\n")
 
   print(summary, n = 100)
@@ -448,7 +538,7 @@ if (interactive()) {
 
   iptw_summary <- summary %>%
     filter(method == "IPTW") %>%
-    select(hazard_type, confounding, situation, mean_hr_avg, bias_avg)
+    select(scenario_num, scenario_name, true_hr, situation, mean_hr_avg, bias_avg)
 
   print(iptw_summary, n = 100)
 }

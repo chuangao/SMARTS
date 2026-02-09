@@ -127,21 +127,26 @@ lookup_confounder_at_time <- function(data, time_col = "new_switch_time",
 # ============================================================================
 
 
+# Default parameters (Scenario 1: Classic medical switch)
 n_pairs = 1000
 beta_treatment = log(0.5)
 beta_confounder = log(1.3)
 lambda_0 = 10
-shape = 1.5
+shape_continuer = 0.9      # Continuers: stable/improving hazard
+shape_switcher_pre = 1.4   # Switchers pre-switch: worsening hazard
+shape_switcher_post = 0.7  # Switchers post-switch: improving hazard
 T_min = 2
 T_max = 6
 switch_start = 0.25
 switch_end = 0.75
 confounder_interval = 0.5
 confounder_baseline_mean = 2.5
+confounder_change_magnitude = 0.5  # How much continuer confounder changes
 confounder_gap_baseline = 0.5
-confounder_gap_peak = 1.6
+confounder_gap_at_switch = 1.6     # Gap at switch time (extreme point)
 confounder_gap_end = 0.8
 confounder_sd = 0.8
+rho = 0.8                          # MVN temporal correlation
 nbin = 10
 seed = 123
 
@@ -151,17 +156,21 @@ validate_smarts <- function(
   beta_treatment = log(0.5),
   beta_confounder = log(1.3),
   lambda_0 = 10,
-  shape = 1.5,
+  shape_continuer = 0.9,        # Continuers: stable/improving hazard
+  shape_switcher_pre = 1.4,     # Switchers pre-switch: worsening hazard
+  shape_switcher_post = 0.7,    # Switchers post-switch: improving hazard
   T_min = 2,
   T_max = 6,
   switch_start = 0.25,
   switch_end = 0.75,
   confounder_interval = 0.5,
   confounder_baseline_mean = 2.5,
+  confounder_change_magnitude = 0.5,  # How much continuer confounder changes
   confounder_gap_baseline = 0.5,
-  confounder_gap_peak = 1.6,
+  confounder_gap_at_switch = 1.6,     # Gap at switch time (extreme point)
   confounder_gap_end = 0.8,
   confounder_sd = 0.8,
+  rho = 0.8,                          # MVN temporal correlation
   nbin = 10,
   seed = 123
 ) {
@@ -178,17 +187,21 @@ validate_smarts <- function(
     beta_treatment = beta_treatment,
     beta_confounder = beta_confounder,
     lambda_0 = lambda_0,
-    shape = shape,
+    shape_continuer = shape_continuer,
+    shape_switcher_pre = shape_switcher_pre,
+    shape_switcher_post = shape_switcher_post,
     T_min = T_min,
     T_max = T_max,
     switch_start = switch_start,
     switch_end = switch_end,
     confounder_interval = confounder_interval,
     confounder_baseline_mean = confounder_baseline_mean,
+    confounder_change_magnitude = confounder_change_magnitude,
     confounder_gap_baseline = confounder_gap_baseline,
-    confounder_gap_peak = confounder_gap_peak,
+    confounder_gap_at_switch = confounder_gap_at_switch,
     confounder_gap_end = confounder_gap_end,
-    confounder_sd = confounder_sd
+    confounder_sd = confounder_sd,
+    rho = rho
   )
 
   cat("  Simulated", nrow(data), "patients\n")

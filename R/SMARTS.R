@@ -162,7 +162,7 @@ random_assign <- function(data, nbin=10, seed = 123, swi_time='swi_yrs', cens_ti
   index_swi_keep <- rep(list(numeric(0)),nbin)
   
   while(any(n_itr_total < 20)){
-    for(i in rev(seq_along(counts$cuts))){
+    for(i in seq_along(counts$cuts)){
       #cat("Working on bin ", i, "\n")
       #print(i)
       assign <- assign_per_bin(counts, i, swi_time=swi_time, cens_time = cens_time)
