@@ -30,6 +30,7 @@ source("simulate_piecewise_hazard.R")
 n_simulations <- 30
 n_pairs <- 2000
 n_cores <- 4
+n_smarts_reps <- 10  # Number of random assignments per SMARTS analysis
 
 # Define clinical scenarios
 clinical_scenarios <- list(
@@ -149,13 +150,9 @@ run_baseline_analysis <- function(data) {
   return(results)
 }
 
-run_smarts_analysis <- function(data) {
-  # SMARTS: assign pseudo-switch times to continuers
+run_single_smarts <- function(switchers, continuers, data, seed) {
+  # Run one SMARTS random assignment and return HRs
 
-  switchers <- data[data$cohort == "switcher", ]
-  continuers <- data[data$cohort == "continuer", ]
-
-  # SMARTS assignment
   switchers_smarts <- switchers
   switchers_smarts$swi_yrs <- switchers_smarts$switch_time
   switchers_smarts$fup_yrs <- switchers_smarts$T_max
@@ -166,20 +163,16 @@ run_smarts_analysis <- function(data) {
 
   smarts_result <- tryCatch({
     random_assign(list(cont = continuers_smarts, swi = switchers_smarts),
-                  nbin = 10, seed = sample(1:10000, 1),
+                  nbin = 10, seed = seed,
                   swi_time = "swi_yrs", cens_time = "fup_yrs")
   }, error = function(e) NULL)
 
-  if (is.null(smarts_result)) {
-    return(list(Naive = NA, Adj = NA, PSM = NA, IPTW = NA, SMR = NA))
-  }
+  if (is.null(smarts_result)) return(NULL)
 
   cont_assigned <- smarts_result$assigned$cont
   swi_assigned <- smarts_result$assigned$swi
 
-  if (nrow(cont_assigned) == 0 || nrow(swi_assigned) == 0) {
-    return(list(Naive = NA, Adj = NA, PSM = NA, IPTW = NA, SMR = NA))
-  }
+  if (nrow(cont_assigned) == 0 || nrow(swi_assigned) == 0) return(NULL)
 
   # Re-derive events
   cont_assigned$new_switch_time <- cont_assigned$swi_yrs
@@ -209,9 +202,7 @@ run_smarts_analysis <- function(data) {
 
   smarts_data <- smarts_data[smarts_data$time > 0 & !is.na(smarts_data$time), ]
 
-  if (nrow(smarts_data) < 100) {
-    return(list(Naive = NA, Adj = NA, PSM = NA, IPTW = NA, SMR = NA))
-  }
+  if (nrow(smarts_data) < 100) return(NULL)
 
   results <- list()
 
@@ -219,13 +210,13 @@ run_smarts_analysis <- function(data) {
   tryCatch({
     cox <- coxph(Surv(time, event) ~ treated, data = smarts_data)
     results$Naive <- exp(coef(cox)["treated"])
-  }, error = function(e) { results$Naive <- NA })
+  }, error = function(e) { results$Naive <<- NA })
 
   # Adjusted
   tryCatch({
     cox <- coxph(Surv(time, event) ~ treated + confounder, data = smarts_data)
     results$Adj <- exp(coef(cox)["treated"])
-  }, error = function(e) { results$Adj <- NA })
+  }, error = function(e) { results$Adj <<- NA })
 
   # PSM
   tryCatch({
@@ -236,7 +227,7 @@ run_smarts_analysis <- function(data) {
     matched_data <- match.data(match_out)
     cox <- coxph(Surv(time, event) ~ treated, data = matched_data)
     results$PSM <- exp(coef(cox)["treated"])
-  }, error = function(e) { results$PSM <- NA })
+  }, error = function(e) { results$PSM <<- NA })
 
   # IPTW (ATE)
   tryCatch({
@@ -250,7 +241,7 @@ run_smarts_analysis <- function(data) {
                                   (1 - p_treated) / (1 - smarts_data$ps))
     cox <- coxph(Surv(time, event) ~ treated, data = smarts_data, weights = weight)
     results$IPTW <- exp(coef(cox)["treated"])
-  }, error = function(e) { results$IPTW <- NA })
+  }, error = function(e) { results$IPTW <<- NA })
 
   # SMR (ATT - Average Treatment Effect in Treated/Switchers)
   tryCatch({
@@ -263,7 +254,40 @@ run_smarts_analysis <- function(data) {
                                       smarts_data$ps / (1 - smarts_data$ps))
     cox <- coxph(Surv(time, event) ~ treated, data = smarts_data, weights = smr_weight)
     results$SMR <- exp(coef(cox)["treated"])
-  }, error = function(e) { results$SMR <- NA })
+  }, error = function(e) { results$SMR <<- NA })
+
+  return(results)
+}
+
+run_smarts_analysis <- function(data, n_reps = n_smarts_reps) {
+  # Run SMARTS n_reps times with different random assignments, average HRs
+
+  switchers <- data[data$cohort == "switcher", ]
+  continuers <- data[data$cohort == "continuer", ]
+
+  methods <- c("Naive", "Adj", "PSM", "IPTW", "SMR")
+  hr_matrix <- matrix(NA, nrow = n_reps, ncol = length(methods))
+  colnames(hr_matrix) <- methods
+
+  for (r in 1:n_reps) {
+    rep_seed <- sample(1:100000, 1)
+    rep_results <- run_single_smarts(switchers, continuers, data, seed = rep_seed)
+
+    if (!is.null(rep_results)) {
+      for (m in methods) {
+        if (!is.null(rep_results[[m]])) {
+          hr_matrix[r, m] <- rep_results[[m]]
+        }
+      }
+    }
+  }
+
+  # Average across reps
+  results <- list()
+  for (m in methods) {
+    results[[m]] <- mean(hr_matrix[, m], na.rm = TRUE)
+    if (is.nan(results[[m]])) results[[m]] <- NA
+  }
 
   return(results)
 }
@@ -288,11 +312,13 @@ for (scenario in clinical_scenarios) {
   cat("================================================================\n\n")
 
   for (h in hazard_trends) {
-    cat("Hazard trend:", h$name, "\n")
+    cat("Hazard trend:", h$name, " (", n_simulations, "sims x", n_smarts_reps, "SMARTS reps, ", n_cores, "cores)\n")
 
-    for (sim in 1:n_simulations) {
-      set.seed(1000 * which(sapply(hazard_trends, function(x) x$name) == h$name) +
-               100 * which(sapply(clinical_scenarios, function(x) x$name) == scenario$name) + sim)
+    h_idx <- which(sapply(hazard_trends, function(x) x$name) == h$name)
+    s_idx <- which(sapply(clinical_scenarios, function(x) x$name) == scenario$name)
+
+    sim_results <- mclapply(1:n_simulations, function(sim) {
+      set.seed(1000 * h_idx + 100 * s_idx + sim)
 
       # Simulate data with time-varying confounding
       data <- simulate_piecewise_hazard(
@@ -312,12 +338,13 @@ for (scenario in clinical_scenarios) {
       # Run Baseline analysis
       baseline_results <- run_baseline_analysis(data)
 
-      # Run SMARTS analysis
+      # Run SMARTS analysis (averaged over n_smarts_reps random assignments)
       smarts_results <- run_smarts_analysis(data)
 
-      # Store results
+      # Collect results for this simulation
+      sim_rows <- data.frame()
       for (method in c("Naive", "Adj", "PSM", "IPTW", "SMR")) {
-        all_results <- rbind(all_results, data.frame(
+        sim_rows <- rbind(sim_rows, data.frame(
           clinical_scenario = scenario$name,
           true_hr = scenario$true_hr,
           hazard_trend = h$name,
@@ -326,8 +353,7 @@ for (scenario in clinical_scenarios) {
           method = method,
           hr = baseline_results[[method]]
         ))
-
-        all_results <- rbind(all_results, data.frame(
+        sim_rows <- rbind(sim_rows, data.frame(
           clinical_scenario = scenario$name,
           true_hr = scenario$true_hr,
           hazard_trend = h$name,
@@ -337,9 +363,12 @@ for (scenario in clinical_scenarios) {
           hr = smarts_results[[method]]
         ))
       }
+      return(sim_rows)
+    }, mc.cores = n_cores)
 
-      if (sim %% 10 == 0) cat("  Completed", sim, "of", n_simulations, "\n")
-    }
+    # Combine results from all simulations
+    all_results <- rbind(all_results, do.call(rbind, sim_results))
+    cat("  Completed", n_simulations, "simulations\n")
   }
 }
 
