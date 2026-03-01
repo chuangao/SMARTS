@@ -110,7 +110,9 @@ create_km_plot <- function(data, title, panel_label, weighted = FALSE,
 
 generate_km_figure <- function(scenario_name, scenario_desc, true_hr,
                                gap_baseline, gap_at_switch, gap_end,
-                               seed = 123, file_suffix = "") {
+                               seed = 123, file_suffix = "",
+                               hazard_trend = "increasing",
+                               base_hazard = 0.005) {
 
   cat("\n============================================================\n")
   cat("Scenario:", scenario_desc, "\n")
@@ -127,9 +129,9 @@ generate_km_figure <- function(scenario_name, scenario_desc, true_hr,
     n_pairs = 5000,
     beta_treatment = log(true_hr),
     beta_confounder = log(2.0),
-    base_hazard = 0.005,
-    hazard_trend = "increasing",
-    trend_strength = 0.5,
+    base_hazard = base_hazard,
+    hazard_trend = hazard_trend,
+    trend_strength = 0.25,
     segment_length = 0.5,
     confounder_gap_baseline = gap_baseline,
     confounder_gap_at_switch = gap_at_switch,
@@ -443,8 +445,9 @@ generate_km_figure <- function(scenario_name, scenario_desc, true_hr,
   # Save Plot
   # --------------------------------------------------------------------------
 
-  pdf_file <- paste0("km_curves_piecewise", file_suffix, ".pdf")
-  png_file <- paste0("km_curves_piecewise", file_suffix, ".png")
+  dir.create("results/plots", recursive = TRUE, showWarnings = FALSE)
+  pdf_file <- paste0("results/plots/km_curves_piecewise", file_suffix, ".pdf")
+  png_file <- paste0("results/plots/km_curves_piecewise", file_suffix, ".png")
 
   ggsave(pdf_file, final_plot,
          width = 14, height = 6.5, units = "in", dpi = 300)
@@ -461,7 +464,7 @@ generate_km_figure <- function(scenario_name, scenario_desc, true_hr,
   # --------------------------------------------------------------------------
 
   cat("\n=== Summary Statistics ===\n")
-  cat("True HR =", true_hr, "| Confounder HR = 2.0 | Hazard trend = Increasing\n")
+  cat("True HR =", true_hr, "| Confounder HR = 2.0 | Hazard trend =", hazard_trend, "\n")
   cat("Gap trajectory:", gap_baseline, "->", gap_at_switch, "->", gap_end, "\n")
   cat("Sample sizes:\n")
   cat("  All subjects:", nrow(data), "\n")

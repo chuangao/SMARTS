@@ -54,7 +54,7 @@ clinical_scenarios <- list(
 
 hazard_trends <- list(
   list(name = "Constant", trend = "constant", strength = 0),
-  list(name = "Increasing", trend = "increasing", strength = 0.5),
+  list(name = "Increasing", trend = "increasing", strength = 0.25),
   list(name = "Decreasing", trend = "decreasing", strength = 0.25)
 )
 
