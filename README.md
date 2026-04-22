@@ -263,13 +263,6 @@ The `inst/paper/scripts/piecewise_varying_confounding/` folder contains the main
 | `generate_tables.R` | Generates summary tables |
 | `explore_km_seeds.R` | Explores seeds for representative KM curves |
 
-### Additional Simulation Scripts
-
-| Folder | Description |
-|--------|-------------|
-| `piecewise_constant/` | Simulations with time-varying baseline hazard but constant confounding |
-| Root scripts (`simulate_survival_confounder.R`, etc.) | Earlier Weibull-based simulations |
-
 ### Output Files
 
 All simulation results and plots are saved to `inst/paper/output/`.
